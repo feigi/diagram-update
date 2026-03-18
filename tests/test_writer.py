@@ -1,5 +1,6 @@
 """Tests for the D2 file writer."""
 
+import logging
 from pathlib import Path
 
 from diagram_update.writer import D2_HEADER, write_diagram
@@ -61,3 +62,40 @@ def test_unknown_diagram_type_uses_type_as_filename(tmp_path: Path) -> None:
     """Unknown diagram types use the type string as the filename."""
     output = write_diagram("a -> b", "custom", tmp_path)
     assert output.name == "custom.d2"
+
+
+def test_merge_preserves_existing_on_rerun(tmp_path: Path) -> None:
+    """Re-running with same content preserves existing content."""
+    write_diagram("api\ndb\napi -> db", "architecture", tmp_path)
+    write_diagram("api\ndb\napi -> db", "architecture", tmp_path)
+    content = (tmp_path / "docs" / "diagrams" / "architecture.d2").read_text()
+    assert "api -> db" in content
+    assert "api" in content
+
+
+def test_merge_adds_new_nodes(tmp_path: Path) -> None:
+    """Re-running with new nodes adds them to existing diagram."""
+    write_diagram("api\ndb\napi -> db", "architecture", tmp_path)
+    write_diagram("api\ndb\ncache\napi -> db\napi -> cache", "architecture", tmp_path)
+    content = (tmp_path / "docs" / "diagrams" / "architecture.d2").read_text()
+    assert "cache" in content
+    assert "api -> cache" in content
+
+
+def test_merge_removal_threshold_writes_dot_new(
+    tmp_path: Path, caplog: logging.LogRecord
+) -> None:
+    """80% removal threshold writes to .d2.new instead."""
+    # Write initial with many nodes
+    write_diagram(
+        "a\nb\nc\nd\ne\nf\na -> b\nb -> c",
+        "architecture",
+        tmp_path,
+    )
+    # Re-run with only 1 node (>80% removal)
+    with caplog.at_level(logging.WARNING):
+        output = write_diagram("a", "architecture", tmp_path)
+    assert output.name == "architecture.d2.new"
+    # Original file should be unchanged
+    original = (tmp_path / "docs" / "diagrams" / "architecture.d2").read_text()
+    assert "b" in original

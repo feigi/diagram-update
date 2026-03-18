@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+from diagram_update.merger import check_removal_threshold, merge_diagrams
+
+logger = logging.getLogger(__name__)
 
 # D2 config header applied to all generated files
 D2_HEADER = """\
@@ -41,7 +46,26 @@ def write_diagram(
     output_path = output_dir / filename
 
     full_content = D2_HEADER + "\n" + d2_content
-    output_path.write_text(full_content, encoding="utf-8")
+
+    # If existing file, merge with anchor-based strategy
+    if output_path.exists():
+        old_content = output_path.read_text(encoding="utf-8")
+        merged_content = merge_diagrams(old_content, full_content)
+
+        # Check 80% removal threshold
+        if check_removal_threshold(old_content, merged_content):
+            new_path = output_path.with_suffix(".d2.new")
+            new_path.write_text(merged_content, encoding="utf-8")
+            logger.warning(
+                "Merge would remove >80%% of existing nodes. "
+                "Wrote to %s instead of overwriting.",
+                new_path,
+            )
+            return new_path
+
+        output_path.write_text(merged_content, encoding="utf-8")
+    else:
+        output_path.write_text(full_content, encoding="utf-8")
 
     return output_path
 
