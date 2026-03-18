@@ -36,17 +36,23 @@ def generate_diagram(
     _check_gh_available()
 
     # Pass 1: Identify components and relationships
+    logger.info("Pass 1: identifying %s components...", diagram_type)
     pass1_prompt = _build_pass1_prompt(skeleton, diagram_type, entry_points)
+    logger.debug("Pass 1 prompt length: %d chars", len(pass1_prompt))
     components_text = _call_gh_copilot(pass1_prompt, model)
     components_text = _parse_response(components_text)
 
     if not components_text.strip():
         raise LLMError("Empty response from gh copilot (pass 1: component identification)")
 
+    logger.info("Pass 1 complete: %d chars of component text", len(components_text))
+
     # Pass 2: Convert to D2 code
+    logger.info("Pass 2: generating D2 code for %s...", diagram_type)
     pass2_prompt = _build_pass2_prompt(
         components_text, diagram_type, existing_d2,
     )
+    logger.debug("Pass 2 prompt length: %d chars", len(pass2_prompt))
     raw = _call_gh_copilot(pass2_prompt, model)
     d2 = _parse_response(raw)
 
@@ -58,16 +64,35 @@ def generate_diagram(
     if not d2.strip():
         raise LLMError("Empty response from gh copilot after retry")
 
+    _validate_d2(d2)
     return d2
 
 
 def _check_gh_available() -> None:
-    """Verify gh CLI is available."""
+    """Verify gh CLI and copilot extension are available."""
     if shutil.which("gh") is None:
         raise ToolError(
             "GitHub CLI is required. Install: https://cli.github.com "
             "and run 'gh extension install github/gh-copilot'"
         )
+
+    # Check that the copilot extension is installed
+    try:
+        result = subprocess.run(
+            ["gh", "extension", "list"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and "copilot" not in result.stdout.lower():
+            raise ToolError(
+                "GitHub Copilot extension is required. "
+                "Install: gh extension install github/gh-copilot"
+            )
+    except subprocess.TimeoutExpired:
+        logger.warning("Timed out checking gh extensions, proceeding anyway")
+    except OSError:
+        logger.warning("Could not check gh extensions, proceeding anyway")
 
 
 def _build_pass1_prompt(
@@ -191,6 +216,27 @@ def _retry_generation(
     return _parse_response(raw)
 
 
+def _validate_d2(d2: str) -> None:
+    """Validate that generated D2 has at least one node and one edge.
+
+    Raises LLMError if the D2 content is structurally invalid.
+    """
+    from diagram_update.merger import parse_d2
+
+    parsed = parse_d2(d2)
+    if not parsed.node_keys:
+        raise LLMError("Generated D2 contains no nodes")
+    if not parsed.edge_tuples:
+        logger.warning(
+            "Generated D2 has %d node(s) but no edges", len(parsed.node_keys)
+        )
+    logger.debug(
+        "D2 validation passed: %d nodes, %d edges",
+        len(parsed.node_keys),
+        len(parsed.edge_tuples),
+    )
+
+
 def _call_gh_copilot(prompt: str, model: str) -> str:
     """Invoke gh copilot CLI and return raw output."""
     cmd = [
@@ -213,10 +259,14 @@ def _call_gh_copilot(prompt: str, model: str) -> str:
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
+        logger.debug("gh copilot stderr: %s", stderr)
         if "not authenticated" in stderr.lower() or "token expired" in stderr.lower():
-            raise LLMError("Run 'gh auth login' to authenticate.")
+            raise LLMError(
+                "GitHub authentication failed. Run 'gh auth login' to authenticate."
+            )
         raise LLMError(f"gh copilot failed (exit {result.returncode}): {stderr}")
 
+    logger.debug("gh copilot returned %d chars", len(result.stdout))
     return result.stdout
 
 

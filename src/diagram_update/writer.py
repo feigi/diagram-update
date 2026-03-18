@@ -47,6 +47,8 @@ def write_diagram(
 
     full_content = D2_HEADER + "\n" + d2_content
 
+    logger.info("Writing %s diagram to %s", diagram_type, output_path)
+
     # If existing file, merge with anchor-based strategy
     if output_path.exists():
         old_content = output_path.read_text(encoding="utf-8")

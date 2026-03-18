@@ -41,13 +41,26 @@ def analyze(config: DiagramConfig, project_root: Path) -> DependencyGraph:
     6. Build and return the dependency graph
     """
     files = _walk_files(config, project_root)
+    logger.info("Found %d source files", len(files))
     languages = sorted({f.language for f in files.values()})
+    logger.info("Detected languages: %s", ", ".join(languages) if languages else "none")
 
     _parse_imports(files, project_root)
     _resolve_imports(files, project_root)
 
+    internal_count = sum(
+        1 for f in files.values()
+        for imp in f.imports if imp.is_internal
+    )
+    logger.info("Resolved %d internal imports", internal_count)
+
     components = _group_into_components(files, config.granularity, project_root)
     relationships = _build_relationships(files, components)
+
+    logger.info(
+        "Built graph: %d components, %d relationships (granularity=%s)",
+        len(components), len(relationships), config.granularity,
+    )
 
     return DependencyGraph(
         components=list(components.values()),

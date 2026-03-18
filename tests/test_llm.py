@@ -13,6 +13,7 @@ from diagram_update.llm import (
     _call_gh_copilot,
     _check_gh_available,
     _retry_generation,
+    _validate_d2,
 )
 from diagram_update.models import LLMError, ToolError
 
@@ -138,16 +139,41 @@ class TestBuildPass2Prompt:
 
 
 class TestCheckGhAvailable:
-    """Tests for gh CLI availability check."""
+    """Tests for gh CLI and copilot extension availability check."""
 
     @patch("diagram_update.llm.shutil.which", return_value=None)
     def test_missing_gh_raises_tool_error(self, mock_which):
         with pytest.raises(ToolError, match="GitHub CLI is required"):
             _check_gh_available()
 
+    @patch("diagram_update.llm.subprocess.run")
     @patch("diagram_update.llm.shutil.which", return_value="/usr/bin/gh")
-    def test_gh_available_succeeds(self, mock_which):
+    def test_gh_available_succeeds(self, mock_which, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="gh-copilot\tgithub/gh-copilot", stderr=""
+        )
         _check_gh_available()  # Should not raise
+
+    @patch("diagram_update.llm.subprocess.run")
+    @patch("diagram_update.llm.shutil.which", return_value="/usr/bin/gh")
+    def test_missing_copilot_extension_raises(self, mock_which, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="gh-dash\tgithub/gh-dash", stderr=""
+        )
+        with pytest.raises(ToolError, match="Copilot extension"):
+            _check_gh_available()
+
+    @patch("diagram_update.llm.subprocess.run")
+    @patch("diagram_update.llm.shutil.which", return_value="/usr/bin/gh")
+    def test_extension_check_timeout_continues(self, mock_which, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="gh", timeout=10)
+        _check_gh_available()  # Should not raise - proceeds on timeout
+
+    @patch("diagram_update.llm.subprocess.run")
+    @patch("diagram_update.llm.shutil.which", return_value="/usr/bin/gh")
+    def test_extension_check_os_error_continues(self, mock_which, mock_run):
+        mock_run.side_effect = OSError("permission denied")
+        _check_gh_available()  # Should not raise - proceeds on OS error
 
 
 class TestCallGhCopilot:
@@ -301,3 +327,33 @@ class TestGenerateDiagram:
         ]
         result = generate_diagram("skeleton", diagram_type="sequence")
         assert "sequence_diagram" in result
+
+    @patch("diagram_update.llm._call_gh_copilot")
+    @patch("diagram_update.llm._check_gh_available")
+    def test_d2_with_no_nodes_raises(self, mock_check, mock_call):
+        # Pass 1 returns components, pass 2 returns only comments/empty lines
+        mock_call.side_effect = [
+            "COMPONENTS:\n- id: api",
+            "# just a comment\n",
+        ]
+        with pytest.raises(LLMError, match="no nodes"):
+            generate_diagram("skeleton text")
+
+
+class TestValidateD2:
+    """Tests for D2 output validation."""
+
+    def test_valid_d2_passes(self):
+        _validate_d2("api: API\ndb: Database\napi -> db: queries")
+
+    def test_empty_nodes_raises(self):
+        with pytest.raises(LLMError, match="no nodes"):
+            _validate_d2("# just a comment")
+
+    def test_nodes_only_warns_no_raise(self):
+        # Nodes without edges is valid but should warn
+        _validate_d2("api: API\ndb: Database")  # Should not raise
+
+    def test_full_diagram_passes(self):
+        d2 = "api: API {\n  handler: Handler\n}\ndb: Database\napi -> db: queries"
+        _validate_d2(d2)  # Should not raise
