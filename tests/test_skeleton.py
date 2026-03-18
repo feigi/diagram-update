@@ -1,11 +1,13 @@
 """Tests for skeleton generator."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 from diagram_update.models import (
     Component,
     DependencyGraph,
     FileInfo,
+    ImportInfo,
     Relationship,
 )
 from diagram_update.skeleton import generate_skeleton
@@ -121,10 +123,14 @@ class TestGenerateSkeleton:
         words = result.split()
         assert len(words) <= 75
 
-    def test_both_sections_present(self):
+    def test_three_sections_present(self):
+        """Skeleton should contain all three sections when data is available."""
         files = {
             "app.py": FileInfo(
-                path=Path("app.py"), language="python", line_count=10
+                path=Path("app.py"),
+                language="python",
+                line_count=10,
+                signatures=["def main():"],
             ),
         }
         relationships = [
@@ -133,6 +139,7 @@ class TestGenerateSkeleton:
         graph = self._make_graph(files=files, relationships=relationships)
         result = generate_skeleton(graph, Path("/project"))
         assert "FILE TREE:" in result
+        assert "SIGNATURES:" in result
         assert "DEPENDENCIES:" in result
 
     def test_no_line_count_omits_annotation(self):
@@ -159,3 +166,129 @@ class TestGenerateSkeleton:
         assert file_lines[0].startswith("alpha.py")
         assert file_lines[1].startswith("mid.py")
         assert file_lines[2].startswith("zoo.py")
+
+
+class TestSignatureRanking:
+    """Tests for signature ranking by reference count."""
+
+    def _make_graph(
+        self,
+        files: dict[str, FileInfo] | None = None,
+        relationships: list[Relationship] | None = None,
+    ) -> DependencyGraph:
+        return DependencyGraph(
+            components=[],
+            relationships=relationships or [],
+            files=files or {},
+            languages=["python"],
+            source_roots=[Path("/project")],
+        )
+
+    def test_signatures_ranked_by_reference_count(self):
+        """Most-referenced files should appear first in signatures section."""
+        files = {
+            "utils.py": FileInfo(
+                path=Path("utils.py"),
+                language="python",
+                signatures=["def helper():"],
+            ),
+            "core.py": FileInfo(
+                path=Path("core.py"),
+                language="python",
+                signatures=["def process():"],
+                imports=[
+                    ImportInfo(
+                        module="utils",
+                        is_internal=True,
+                        resolved_path=Path("utils.py"),
+                    ),
+                ],
+            ),
+            "api.py": FileInfo(
+                path=Path("api.py"),
+                language="python",
+                signatures=["def handle():"],
+                imports=[
+                    ImportInfo(
+                        module="utils",
+                        is_internal=True,
+                        resolved_path=Path("utils.py"),
+                    ),
+                    ImportInfo(
+                        module="core",
+                        is_internal=True,
+                        resolved_path=Path("core.py"),
+                    ),
+                ],
+            ),
+        }
+        graph = self._make_graph(files=files)
+        result = generate_skeleton(graph, Path("/project"))
+
+        # utils.py has 2 refs, core.py has 1 ref, api.py has 0 refs
+        sig_section = result.split("SIGNATURES:\n")[1].split("\n\nDEPENDENCIES:")[0]
+        lines = sig_section.split("\n")
+        file_headers = [l for l in lines if l.startswith("# ")]
+        assert "utils.py" in file_headers[0]
+        assert "(refs: 2)" in file_headers[0]
+        assert "core.py" in file_headers[1]
+        assert "(refs: 1)" in file_headers[1]
+
+    def test_signatures_section_shows_ref_counts(self):
+        """Files with references should show their count."""
+        files = {
+            "a.py": FileInfo(
+                path=Path("a.py"),
+                language="python",
+                signatures=["def foo():"],
+            ),
+            "b.py": FileInfo(
+                path=Path("b.py"),
+                language="python",
+                signatures=["def bar():"],
+                imports=[
+                    ImportInfo(
+                        module="a",
+                        is_internal=True,
+                        resolved_path=Path("a.py"),
+                    ),
+                ],
+            ),
+        }
+        graph = self._make_graph(files=files)
+        result = generate_skeleton(graph, Path("/project"))
+        assert "(refs: 1)" in result
+
+    def test_no_signatures_omits_section(self):
+        """SIGNATURES section should be absent when no files have signatures."""
+        files = {
+            "app.py": FileInfo(
+                path=Path("app.py"), language="python", line_count=10
+            ),
+        }
+        graph = self._make_graph(files=files)
+        result = generate_skeleton(graph, Path("/project"))
+        assert "SIGNATURES:" not in result
+
+    def test_large_project_truncates_gracefully(self):
+        """With a tight budget, low-connectivity files should be elided."""
+        files = {}
+        for i in range(50):
+            files[f"mod{i:03d}.py"] = FileInfo(
+                path=Path(f"mod{i:03d}.py"),
+                language="python",
+                line_count=100,
+                signatures=[f"def func{i}():", f"class Class{i}:"],
+            )
+        graph = self._make_graph(files=files)
+        result = generate_skeleton(graph, Path("/project"), token_budget=200)
+        # Should fit within budget
+        words = result.split()
+        max_words = int(200 * 0.75)
+        assert len(words) <= max_words
+
+    def test_empty_project_minimal_skeleton(self):
+        """Empty project produces empty skeleton."""
+        graph = self._make_graph()
+        result = generate_skeleton(graph, Path("/project"))
+        assert result == ""
