@@ -36,26 +36,78 @@ def test_missing_gh_binary(tmp_path: Path, capsys) -> None:
 
 
 def test_full_pipeline_success(tmp_path: Path, capsys) -> None:
-    """CLI runs full pipeline when LLM returns valid D2."""
+    """CLI runs full pipeline generating all diagram types."""
     pkg = tmp_path / "src"
     pkg.mkdir()
     (pkg / "app.py").write_text("import os\n")
 
+    fake_components = "COMPONENTS:\n- id: api, label: API, type: service"
     fake_d2 = "api: API\ndb: Database\napi -> db: queries"
 
     with patch("diagram_update.llm._check_gh_available"):
-        with patch("diagram_update.llm._call_gh_copilot", return_value=fake_d2):
+        with patch(
+            "diagram_update.llm._call_gh_copilot",
+            side_effect=[
+                fake_components, fake_d2,  # architecture
+                fake_components, fake_d2,  # dependencies
+                fake_components, fake_d2,  # sequence
+            ],
+        ):
             result = main([str(tmp_path)])
 
     assert result == 0
     output = capsys.readouterr().out
     assert "architecture.d2" in output
+    assert "dependencies.d2" in output
+    assert "sequence.d2" in output
 
-    written = tmp_path / "docs" / "diagrams" / "architecture.d2"
-    assert written.exists()
-    content = written.read_text()
+    diagrams_dir = tmp_path / "docs" / "diagrams"
+    assert (diagrams_dir / "architecture.d2").exists()
+    assert (diagrams_dir / "dependencies.d2").exists()
+    assert (diagrams_dir / "sequence.d2").exists()
+
+    content = (diagrams_dir / "architecture.d2").read_text()
     assert "api -> db" in content
     assert "layout-engine: elk" in content
+
+
+def test_partial_failure_continues(tmp_path: Path, capsys) -> None:
+    """CLI continues generating other diagrams if one fails."""
+    pkg = tmp_path / "src"
+    pkg.mkdir()
+    (pkg / "app.py").write_text("import os\n")
+
+    fake_components = "COMPONENTS:\n- id: api"
+    fake_d2 = "api: API"
+
+    with patch("diagram_update.llm._check_gh_available"):
+        with patch(
+            "diagram_update.llm._call_gh_copilot",
+            side_effect=[
+                fake_components, fake_d2,  # architecture succeeds
+                "",  # dependencies pass1 fails (empty)
+                fake_components, fake_d2,  # sequence succeeds
+            ],
+        ):
+            result = main([str(tmp_path)])
+
+    assert result == 0  # partial success
+    output = capsys.readouterr()
+    assert "architecture.d2" in output.out
+    assert "Error (dependencies)" in output.err
+
+
+def test_all_diagrams_fail(tmp_path: Path, capsys) -> None:
+    """CLI returns error code when all diagram types fail."""
+    pkg = tmp_path / "src"
+    pkg.mkdir()
+    (pkg / "app.py").write_text("import os\n")
+
+    with patch("diagram_update.llm._check_gh_available"):
+        with patch("diagram_update.llm._call_gh_copilot", return_value=""):
+            result = main([str(tmp_path)])
+
+    assert result == 1
 
 
 def test_verbose_flag(tmp_path: Path) -> None:
@@ -64,8 +116,12 @@ def test_verbose_flag(tmp_path: Path) -> None:
     pkg.mkdir()
     (pkg / "app.py").write_text("x = 1\n")
 
+    fake_components = "COMPONENTS:\n- id: a"
     fake_d2 = "a: A"
     with patch("diagram_update.llm._check_gh_available"):
-        with patch("diagram_update.llm._call_gh_copilot", return_value=fake_d2):
+        with patch(
+            "diagram_update.llm._call_gh_copilot",
+            side_effect=[fake_components, fake_d2] * 3,
+        ):
             result = main([str(tmp_path), "-v"])
     assert result == 0

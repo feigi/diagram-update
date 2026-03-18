@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
 
 from diagram_update.models import LLMError, ToolError
+
+logger = logging.getLogger(__name__)
 
 # Pattern to strip markdown code fences from LLM output
 _FENCE_RE = re.compile(
@@ -20,22 +23,40 @@ def generate_diagram(
     diagram_type: str = "architecture",
     existing_d2: str | None = None,
     model: str = "claude-opus-4-6",
+    entry_points: list[str] | None = None,
 ) -> str:
     """Generate D2 diagram code via gh copilot CLI.
 
-    Uses a single-pass approach for v1: sends the skeleton and asks
-    for D2 code directly. Two-pass approach deferred to Step 10.
+    Uses a two-pass approach:
+    1. Identify components and relationships from skeleton
+    2. Convert to D2 code
 
     Returns raw D2 string. Raises LLMError on failure.
     """
     _check_gh_available()
 
-    prompt = _build_prompt(skeleton, diagram_type, existing_d2)
-    raw = _call_gh_copilot(prompt, model)
+    # Pass 1: Identify components and relationships
+    pass1_prompt = _build_pass1_prompt(skeleton, diagram_type, entry_points)
+    components_text = _call_gh_copilot(pass1_prompt, model)
+    components_text = _parse_response(components_text)
+
+    if not components_text.strip():
+        raise LLMError("Empty response from gh copilot (pass 1: component identification)")
+
+    # Pass 2: Convert to D2 code
+    pass2_prompt = _build_pass2_prompt(
+        components_text, diagram_type, existing_d2,
+    )
+    raw = _call_gh_copilot(pass2_prompt, model)
     d2 = _parse_response(raw)
 
     if not d2.strip():
-        raise LLMError("Empty response from gh copilot")
+        # Retry once with error correction prompt
+        logger.warning("Empty D2 response, retrying with error correction prompt")
+        d2 = _retry_generation(components_text, diagram_type, model)
+
+    if not d2.strip():
+        raise LLMError("Empty response from gh copilot after retry")
 
     return d2
 
@@ -49,25 +70,86 @@ def _check_gh_available() -> None:
         )
 
 
-def _build_prompt(
+def _build_pass1_prompt(
     skeleton: str,
     diagram_type: str,
-    existing_d2: str | None,
+    entry_points: list[str] | None = None,
 ) -> str:
-    """Build the LLM prompt from skeleton and diagram type."""
+    """Build the Pass 1 prompt for component identification."""
     parts = [
-        "You are a software architect. Analyze the following codebase skeleton "
-        "and generate a D2 diagram.\n",
+        "You are a software architect analyzing a codebase. Given the following "
+        "codebase skeleton, identify the key architectural components and their "
+        "relationships.\n",
         f"Diagram type: {diagram_type}\n",
         "Codebase skeleton:\n",
         skeleton,
+    ]
+
+    if diagram_type == "architecture":
+        parts.append(
+            "\n\nFocus on high-level services, modules, and packages. "
+            "Group related files into logical architectural components."
+        )
+    elif diagram_type == "dependencies":
+        parts.append(
+            "\n\nFocus on package-level and module-level import relationships. "
+            "Show every direct dependency between packages."
+        )
+    elif diagram_type == "sequence":
+        if entry_points:
+            ep_list = ", ".join(entry_points)
+            parts.append(
+                f"\n\nTrace the call flows starting from these entry points: {ep_list}. "
+                "Show the sequence of interactions between components for each flow."
+            )
+        else:
+            parts.append(
+                "\n\nInfer the top 5 most significant entry points or call flows. "
+                "Show the sequence of interactions between components for each flow."
+            )
+
+    parts.extend([
+        "\n\nOutput a structured list:",
+        "COMPONENTS:",
+        "- id: <key>, label: <human name>, type: <service|module|database|queue|external>",
+        "- ...",
+        "",
+        "RELATIONSHIPS:",
+        "- <source_id> -> <target_id>: <relationship description>",
+        "- ...",
+        "",
+        "Output ONLY the structured list, no explanations.",
+    ])
+
+    return "\n".join(parts)
+
+
+def _build_pass2_prompt(
+    components_text: str,
+    diagram_type: str,
+    existing_d2: str | None,
+) -> str:
+    """Build the Pass 2 prompt for D2 generation."""
+    parts = [
+        "Convert the following software architecture components into a valid D2 diagram.\n",
+        components_text,
         "\n\nD2 syntax rules:",
         "- Nodes: `key: Label`",
         "- Connections: `a -> b: label`",
         "- Containers: `group: Label { child1; child2 }`",
         "- Use `{shape: cylinder}` for databases, `{shape: queue}` for queues",
+        "- Use `{shape: cloud}` for external services",
         "- Use containers to group related components by module/service",
     ]
+
+    if diagram_type == "sequence":
+        parts.extend([
+            "",
+            "This is a sequence diagram. Use this D2 structure:",
+            "- Create a container with `shape: sequence_diagram`",
+            "- Declare actors as nodes inside the container",
+            "- Declare messages as edges between actors (in call order)",
+        ])
 
     if existing_d2:
         parts.extend([
@@ -81,6 +163,32 @@ def _build_prompt(
     )
 
     return "\n".join(parts)
+
+
+def _retry_generation(
+    components_text: str,
+    diagram_type: str,
+    model: str,
+) -> str:
+    """Retry D2 generation with an error correction prompt."""
+    prompt = (
+        "The previous attempt to generate a D2 diagram produced an empty or "
+        "invalid response. Please try again.\n\n"
+        "Convert these components into valid D2 code:\n\n"
+        f"{components_text}\n\n"
+        "D2 syntax rules:\n"
+        "- Nodes: `key: Label`\n"
+        "- Connections: `a -> b: label`\n"
+        "- Containers: `group: Label { child1; child2 }`\n"
+    )
+    if diagram_type == "sequence":
+        prompt += (
+            "- This is a sequence diagram: use `shape: sequence_diagram` on a container\n"
+        )
+    prompt += "\nOutput ONLY valid D2 code. No markdown fences, no explanations."
+
+    raw = _call_gh_copilot(prompt, model)
+    return _parse_response(raw)
 
 
 def _call_gh_copilot(prompt: str, model: str) -> str:

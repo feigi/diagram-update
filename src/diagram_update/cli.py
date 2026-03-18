@@ -16,6 +16,9 @@ from diagram_update.writer import write_diagram
 
 logger = logging.getLogger(__name__)
 
+# Diagram types generated in a single run
+_DIAGRAM_TYPES = ["architecture", "dependencies", "sequence"]
+
 
 def main(argv: list[str] | None = None) -> int:
     """Run the diagram-update pipeline."""
@@ -44,18 +47,25 @@ def main(argv: list[str] | None = None) -> int:
     skeleton = generate_skeleton(graph, project_root)
     logger.info("Generated skeleton (%d chars)", len(skeleton))
 
-    try:
-        d2_code = generate_diagram(
-            skeleton,
-            diagram_type="architecture",
-            model=config.model,
-        )
-    except (ToolError, LLMError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+    errors = 0
+    for diagram_type in _DIAGRAM_TYPES:
+        try:
+            d2_code = generate_diagram(
+                skeleton,
+                diagram_type=diagram_type,
+                model=config.model,
+                entry_points=config.entry_points or None,
+            )
+        except (ToolError, LLMError) as exc:
+            print(f"Error ({diagram_type}): {exc}", file=sys.stderr)
+            errors += 1
+            continue
 
-    output_path = write_diagram(d2_code, "architecture", project_root)
-    print(f"Wrote {output_path}")
+        output_path = write_diagram(d2_code, diagram_type, project_root)
+        print(f"Wrote {output_path}")
+
+    if errors == len(_DIAGRAM_TYPES):
+        return 1
 
     return 0
 
