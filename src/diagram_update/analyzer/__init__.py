@@ -1,1 +1,307 @@
 """Static analysis: extract imports and build dependency graphs."""
+
+from __future__ import annotations
+
+import fnmatch
+import logging
+from collections import defaultdict
+from pathlib import Path
+
+from diagram_update.models import (
+    Component,
+    DependencyGraph,
+    DiagramConfig,
+    FileInfo,
+    ImportInfo,
+    Relationship,
+)
+
+from .python_parser import parse_python_file
+
+logger = logging.getLogger(__name__)
+
+LANGUAGE_EXTENSIONS: dict[str, str] = {
+    ".py": "python",
+    ".java": "java",
+    ".c": "c",
+    ".h": "c",
+}
+
+
+def analyze(config: DiagramConfig, project_root: Path) -> DependencyGraph:
+    """Run static analysis on the project.
+
+    1. Walk project_root, filtered by config.include/exclude
+    2. Detect language(s) and select appropriate parser(s)
+    3. Parse all source files to extract imports
+    4. Resolve imports to internal file paths
+    5. Group files into components based on config.granularity
+    6. Build and return the dependency graph
+    """
+    files = _walk_files(config, project_root)
+    languages = sorted({f.language for f in files.values()})
+
+    _parse_imports(files, project_root)
+    _resolve_imports(files, project_root)
+
+    components = _group_into_components(files, config.granularity, project_root)
+    relationships = _build_relationships(files, components)
+
+    return DependencyGraph(
+        components=list(components.values()),
+        relationships=relationships,
+        files=files,
+        languages=languages,
+        source_roots=[project_root],
+    )
+
+
+def _walk_files(config: DiagramConfig, project_root: Path) -> dict[str, FileInfo]:
+    """Walk project directory applying include/exclude filters."""
+    files: dict[str, FileInfo] = {}
+
+    for path in sorted(project_root.rglob("*")):
+        if not path.is_file():
+            continue
+
+        rel = path.relative_to(project_root)
+        rel_str = str(rel)
+
+        ext = path.suffix
+        if ext not in LANGUAGE_EXTENSIONS:
+            continue
+
+        if not _matches_any(rel_str, config.include):
+            continue
+        if _matches_any(rel_str, config.exclude):
+            continue
+
+        language = LANGUAGE_EXTENSIONS[ext]
+        try:
+            line_count = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+        except OSError:
+            line_count = 0
+
+        files[rel_str] = FileInfo(
+            path=rel,
+            language=language,
+            line_count=line_count,
+        )
+
+    return files
+
+
+def _matches_any(path_str: str, patterns: list[str]) -> bool:
+    """Check if a path matches any of the given glob patterns."""
+    for pattern in patterns:
+        if fnmatch.fnmatch(path_str, pattern):
+            return True
+        # fnmatch doesn't handle ** as recursive glob - handle it manually
+        if "**" in pattern:
+            # "**/*" should match any depth including root files
+            # "tests/**" should match anything under tests/
+            dir_pattern = pattern.split("**")[0].rstrip("/")
+            if not dir_pattern:
+                # Pattern like "**/*" matches everything
+                return True
+            if path_str.startswith(dir_pattern + "/") or path_str == dir_pattern:
+                return True
+    return False
+
+
+def _parse_imports(files: dict[str, FileInfo], project_root: Path) -> None:
+    """Parse imports from all source files."""
+    for rel_str, file_info in files.items():
+        full_path = project_root / rel_str
+        if file_info.language == "python":
+            file_info.imports = parse_python_file(full_path)
+
+
+def _resolve_imports(files: dict[str, FileInfo], project_root: Path) -> None:
+    """Resolve import strings to internal file paths."""
+    internal_paths = set(files.keys())
+
+    # Build a mapping from dotted module paths to file paths for Python
+    module_to_path: dict[str, str] = {}
+    for rel_str in internal_paths:
+        if rel_str.endswith(".py"):
+            dotted = _path_to_dotted(rel_str)
+            if dotted:
+                module_to_path[dotted] = rel_str
+
+    for rel_str, file_info in files.items():
+        if file_info.language != "python":
+            continue
+        for imp in file_info.imports:
+            resolved = _resolve_python_import(imp, rel_str, module_to_path, internal_paths)
+            if resolved:
+                imp.is_internal = True
+                imp.resolved_path = Path(resolved)
+            else:
+                imp.is_internal = False
+
+
+def _path_to_dotted(rel_path: str) -> str | None:
+    """Convert a Python file path to a dotted module name.
+
+    e.g., 'src/diagram_update/models.py' -> 'src.diagram_update.models'
+          'src/diagram_update/__init__.py' -> 'src.diagram_update'
+    """
+    if not rel_path.endswith(".py"):
+        return None
+    path = rel_path[:-3]  # strip .py
+    if path.endswith("/__init__"):
+        path = path[:-9]  # strip /__init__
+    return path.replace("/", ".")
+
+
+def _resolve_python_import(
+    imp: ImportInfo,
+    importing_file: str,
+    module_to_path: dict[str, str],
+    internal_paths: set[str],
+) -> str | None:
+    """Resolve a single Python import to an internal file path."""
+    if imp.level > 0:
+        # Relative import
+        parts = importing_file.split("/")
+        # Go up `level` directories from the importing file's directory
+        if importing_file.endswith("/__init__.py"):
+            pkg_parts = parts[:-1]  # directory containing __init__.py
+        else:
+            pkg_parts = parts[:-1]  # directory containing the file
+
+        levels_up = imp.level - 1  # level=1 means current package
+        if levels_up > 0:
+            pkg_parts = pkg_parts[:-levels_up] if levels_up < len(pkg_parts) else []
+
+        if not pkg_parts:
+            base = imp.module
+        elif imp.module:
+            base = "/".join(pkg_parts) + "/" + imp.module.replace(".", "/")
+        else:
+            base = "/".join(pkg_parts)
+
+        # Check file.py and package/__init__.py
+        candidates = [base + ".py", base + "/__init__.py"]
+        for candidate in candidates:
+            if candidate in internal_paths:
+                return candidate
+        return None
+    else:
+        # Absolute import
+        module = imp.module
+        if module in module_to_path:
+            return module_to_path[module]
+
+        # Try progressively shorter prefixes (e.g., 'a.b.c' -> 'a.b' -> 'a')
+        parts = module.split(".")
+        for i in range(len(parts) - 1, 0, -1):
+            prefix = ".".join(parts[:i])
+            if prefix in module_to_path:
+                return module_to_path[prefix]
+
+        return None
+
+
+def _group_into_components(
+    files: dict[str, FileInfo],
+    granularity: str,
+    project_root: Path,
+) -> dict[str, Component]:
+    """Group files into components based on granularity setting."""
+    components: dict[str, Component] = {}
+    file_to_component: dict[str, str] = {}
+
+    for rel_str, file_info in files.items():
+        comp_id = _compute_component_id(rel_str, granularity, file_info.language)
+        file_to_component[rel_str] = comp_id
+        file_info.component_id = comp_id
+
+        if comp_id not in components:
+            components[comp_id] = Component(
+                id=comp_id,
+                label=_compute_component_label(comp_id),
+                files=[],
+                component_type=granularity,
+            )
+        components[comp_id].files.append(file_info.path)
+
+    return components
+
+
+def _compute_component_id(rel_path: str, granularity: str, language: str) -> str:
+    """Compute the component ID for a file based on granularity."""
+    parts = Path(rel_path).parts
+
+    if granularity == "module":
+        # Each file is its own component
+        return rel_path.replace("/", ".").rsplit(".", 1)[0]
+
+    if granularity == "directory":
+        # Group by top-level directory
+        if len(parts) > 1:
+            return parts[0]
+        return parts[0].rsplit(".", 1)[0]
+
+    # granularity == "package" (default)
+    if language == "python":
+        # Group by Python package (directory containing __init__.py or
+        # the parent directory for standalone files)
+        if len(parts) > 1:
+            # Use the first two directory levels if available, otherwise first
+            if len(parts) > 2:
+                return ".".join(parts[:2])
+            return parts[0]
+        return parts[0].rsplit(".", 1)[0]
+    elif language == "java":
+        # Group by package directory
+        if len(parts) > 1:
+            return ".".join(parts[:-1])
+        return parts[0].rsplit(".", 1)[0]
+    else:
+        # C: group by directory
+        if len(parts) > 1:
+            return parts[0] if len(parts) == 2 else ".".join(parts[:2])
+        return parts[0].rsplit(".", 1)[0]
+
+
+def _compute_component_label(comp_id: str) -> str:
+    """Generate a human-readable label from a component ID."""
+    # Use the last segment of the dotted path
+    parts = comp_id.split(".")
+    return parts[-1]
+
+
+def _build_relationships(
+    files: dict[str, FileInfo],
+    components: dict[str, Component],
+) -> list[Relationship]:
+    """Build component-level relationships from file-level imports."""
+    # Aggregate import edges: (source_component, target_component) -> count
+    edge_counts: dict[tuple[str, str], int] = defaultdict(int)
+
+    for rel_str, file_info in files.items():
+        source_comp = file_info.component_id
+        for imp in file_info.imports:
+            if not imp.is_internal or imp.resolved_path is None:
+                continue
+            target_file = str(imp.resolved_path)
+            if target_file not in files:
+                continue
+            target_comp = files[target_file].component_id
+            if source_comp != target_comp:
+                edge_counts[(source_comp, target_comp)] += 1
+
+    relationships = []
+    for (source, target), weight in sorted(edge_counts.items()):
+        relationships.append(
+            Relationship(
+                source=source,
+                target=target,
+                rel_type="imports",
+                weight=weight,
+            )
+        )
+
+    return relationships
