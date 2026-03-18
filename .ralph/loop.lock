@@ -1,0 +1,5 @@
+{
+  "pid": 28757,
+  "started": "2026-03-18T22:13:12.340598Z",
+  "prompt": "/context add .agents/planning/2026-03-18-diagram-update/**/*.md"
+}

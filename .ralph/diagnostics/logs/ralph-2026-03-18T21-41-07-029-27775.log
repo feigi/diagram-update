@@ -1,0 +1,20 @@
+[2m2026-03-18T20:41:07.033645Z[0m [33m WARN[0m [2mralph::preflight[0m[2m:[0m Config file "presets/pdd-to-code-assist.yml" not found, using defaults
+[2m2026-03-18T20:41:07.037491Z[0m [33m WARN[0m [2mralph::loop_runner[0m[2m:[0m Interactive mode requested but stdout is not a TTY, falling back to autonomous
+[2m2026-03-18T20:41:07.038426Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Memory injection check: enabled=true, inject=Auto, workspace_root="/Users/chris/dev/diagram-update"
+[2m2026-03-18T20:41:07.038434Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m L2026-03-18T22:13:09.841644Z  INFO ralph_tui::app: Ctrl+C detected, signaling abort
+(exists: false)
+[2m2026-03-18T20:41:07.038439Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Successfully loaded 0 memories from store
+[2m2026-03-18T20:41:07.038441Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Memory store is empty - no memories to inject
+[2m2026-03-18T20:44:03.492689Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Memory injection check: enabled=true, inject=Auto, workspace_root="/Users/chris/dev/diagram-update"
+[2m2026-03-18T20:44:03.492711Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Looking for memories at: "/Users/chris/dev/diagram-update/.ralph/agent/memories.md" (exists: true)
+[2m2026-03-18T20:44:03.493402Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Successfully loaded 1 memories from store
+[2m2026-03-18T20:44:03.493409Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Injecting 1 memories (273 chars) into prompt
+[2m2026-03-18T20:44:03.493434Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Injecting scratchpad (1280 chars) into prompt
+[2m2026-03-18T20:44:03.493505Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Injecting ready tasks (0 ready, 0 open, 1 closed) into prompt
+[2m2026-03-18T20:46:18.082007Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Memory injection check: enabled=true, inject=Auto, workspace_root="/Users/chris/dev/diagram-update"
+[2m2026-03-18T20:46:18.082059Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Looking for memories at: "/Users/chris/dev/diagram-update/.ralph/agent/memories.md" (exists: true)
+[2m2026-03-18T20:46:18.082249Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Successfully loaded 1 memories from store
+[2m2026-03-18T20:46:18.082266Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Injecting 1 memories (273 chars) into prompt
+[2m2026-03-18T20:46:18.082324Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Injecting scratchpad (1584 chars) into prompt
+[2m2026-03-18T20:46:18.082474Z[0m [32m INFO[0m [2mralph_core::event_loop[0m[2m:[0m Injecting ready tasks (0 ready, 0 open, 2 closed) into prompt
+[2m2026-03-18T22:13:09.842009Z[0m [33m WARN[0m [2mralph::rpc_stdin[0m[2m:[0m Failed to write to stdout, stopping emitter
