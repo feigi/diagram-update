@@ -171,7 +171,7 @@ Options available through GitHub Models:
 
 Which model, or should the tool default to one with the option to configure?
 
-**Answer:** Claude Opus 4.6 via GitHub Copilot CLI. Invoked as `gh copilot -p "..." -s --model claude-opus-4-6 --no-ask-user`. The `-s` flag strips decoration for scriptable plain-text output. No JSON mode available, so prompts must instruct the model to output only D2 code. This satisfies both requirements: GitHub Copilot as provider + Claude Opus 4.6 as model.
+**Answer:** Claude Opus 4.6 via GitHub Copilot CLI. Invoked as `gh copilot -p "..." -s --model  claude-opus-4.6 --no-ask-user`. The `-s` flag strips decoration for scriptable plain-text output. No JSON mode available, so prompts must instruct the model to output only D2 code. This satisfies both requirements: GitHub Copilot as provider + Claude Opus 4.6 as model.
 
 ---
 

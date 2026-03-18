@@ -1,4 +1,4 @@
-"""LLM client: invoke Claude via gh copilot CLI."""
+"""LLM client: invoke Claude via GitHub Copilot CLI."""
 
 from __future__ import annotations
 
@@ -22,10 +22,10 @@ def generate_diagram(
     skeleton: str,
     diagram_type: str = "architecture",
     existing_d2: str | None = None,
-    model: str = "claude-opus-4-6",
+    model: str = " claude-opus-4.6",
     entry_points: list[str] | None = None,
 ) -> str:
-    """Generate D2 diagram code via gh copilot CLI.
+    """Generate D2 diagram code via GitHub Copilot CLI.
 
     Uses a two-pass approach:
     1. Identify components and relationships from skeleton
@@ -33,17 +33,17 @@ def generate_diagram(
 
     Returns raw D2 string. Raises LLMError on failure.
     """
-    _check_gh_available()
+    _check_copilot_available()
 
     # Pass 1: Identify components and relationships
     logger.info("Pass 1: identifying %s components...", diagram_type)
     pass1_prompt = _build_pass1_prompt(skeleton, diagram_type, entry_points)
     logger.debug("Pass 1 prompt length: %d chars", len(pass1_prompt))
-    components_text = _call_gh_copilot(pass1_prompt, model)
+    components_text = _call_copilot(pass1_prompt, model)
     components_text = _parse_response(components_text)
 
     if not components_text.strip():
-        raise LLMError("Empty response from gh copilot (pass 1: component identification)")
+        raise LLMError("Empty response from copilot (pass 1: component identification)")
 
     logger.info("Pass 1 complete: %d chars of component text", len(components_text))
 
@@ -53,7 +53,7 @@ def generate_diagram(
         components_text, diagram_type, existing_d2,
     )
     logger.debug("Pass 2 prompt length: %d chars", len(pass2_prompt))
-    raw = _call_gh_copilot(pass2_prompt, model)
+    raw = _call_copilot(pass2_prompt, model)
     d2 = _parse_response(raw)
 
     if not d2.strip():
@@ -62,37 +62,20 @@ def generate_diagram(
         d2 = _retry_generation(components_text, diagram_type, model)
 
     if not d2.strip():
-        raise LLMError("Empty response from gh copilot after retry")
+        raise LLMError("Empty response from copilot after retry")
 
     _validate_d2(d2)
     return d2
 
 
-def _check_gh_available() -> None:
-    """Verify gh CLI and copilot extension are available."""
-    if shutil.which("gh") is None:
+def _check_copilot_available() -> None:
+    """Verify GitHub Copilot CLI is installed."""
+    if shutil.which("copilot") is None:
         raise ToolError(
-            "GitHub CLI is required. Install: https://cli.github.com "
-            "and run 'gh extension install github/gh-copilot'"
+            "GitHub Copilot CLI is required. "
+            "Install: npm install -g @github/copilot "
+            "or: curl -fsSL https://gh.io/copilot-install | bash"
         )
-
-    # Check that the copilot extension is installed
-    try:
-        result = subprocess.run(
-            ["gh", "extension", "list"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0 and "copilot" not in result.stdout.lower():
-            raise ToolError(
-                "GitHub Copilot extension is required. "
-                "Install: gh extension install github/gh-copilot"
-            )
-    except subprocess.TimeoutExpired:
-        logger.warning("Timed out checking gh extensions, proceeding anyway")
-    except OSError:
-        logger.warning("Could not check gh extensions, proceeding anyway")
 
 
 def _build_pass1_prompt(
@@ -212,7 +195,7 @@ def _retry_generation(
         )
     prompt += "\nOutput ONLY valid D2 code. No markdown fences, no explanations."
 
-    raw = _call_gh_copilot(prompt, model)
+    raw = _call_copilot(prompt, model)
     return _parse_response(raw)
 
 
@@ -237,14 +220,15 @@ def _validate_d2(d2: str) -> None:
     )
 
 
-def _call_gh_copilot(prompt: str, model: str) -> str:
-    """Invoke gh copilot CLI and return raw output."""
+def _call_copilot(prompt: str, model: str) -> str:
+    """Invoke GitHub Copilot CLI in non-interactive mode and return output."""
     cmd = [
-        "gh", "copilot",
+        "copilot",
         "-p", prompt,
         "-s",
         "--model", model,
         "--no-ask-user",
+        "--no-custom-instructions",
     ]
 
     try:
@@ -252,21 +236,21 @@ def _call_gh_copilot(prompt: str, model: str) -> str:
             cmd,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,
         )
     except subprocess.TimeoutExpired:
-        raise LLMError("gh copilot timed out after 60s")
+        raise LLMError("copilot timed out after 120s")
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
-        logger.debug("gh copilot stderr: %s", stderr)
+        logger.debug("copilot stderr: %s", stderr)
         if "not authenticated" in stderr.lower() or "token expired" in stderr.lower():
             raise LLMError(
-                "GitHub authentication failed. Run 'gh auth login' to authenticate."
+                "GitHub authentication failed. Run 'copilot login' to authenticate."
             )
-        raise LLMError(f"gh copilot failed (exit {result.returncode}): {stderr}")
+        raise LLMError(f"copilot failed (exit {result.returncode}): {stderr}")
 
-    logger.debug("gh copilot returned %d chars", len(result.stdout))
+    logger.debug("copilot returned %d chars", len(result.stdout))
     return result.stdout
 
 

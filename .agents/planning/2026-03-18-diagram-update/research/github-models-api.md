@@ -4,7 +4,7 @@
 **Purpose:** Evaluate GitHub Models API as an LLM provider, specifically for Claude Opus 4.6
 
 > **UPDATE:** Claude Opus 4.6 is not available via GitHub Models API. Instead, we will use
-> **GitHub Copilot CLI** (`gh copilot -p "..." -s --model claude-opus-4-6 --no-ask-user`)
+> **GitHub Copilot CLI** (`gh copilot -p "..." -s --model  claude-opus-4.6 --no-ask-user`)
 > which supports Claude model selection and scriptable plain-text output.
 > See: https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference
 
@@ -117,7 +117,7 @@ Based on thorough research, **Anthropic Claude models are not currently availabl
 
 ### Where Claude IS Available on GitHub
 
-- **GitHub Copilot:** Claude Opus 4.6 is available as a model choice for Copilot Pro, Pro+, Business, and Enterprise users ([changelog](https://github.blog/changelog/2026-02-05-claude-opus-4-6-is-now-generally-available-for-github-copilot/)).
+- **GitHub Copilot:** Claude Opus 4.6 is available as a model choice for Copilot Pro, Pro+, Business, and Enterprise users ([changelog](https://github.blog/changelog/2026-02-05- claude-opus-4.6-is-now-generally-available-for-github-copilot/)).
 - **GitHub Copilot coding agent:** The Anthropic Claude coding agent (public preview) uses the Claude Agent SDK and is powered by the Copilot subscription.
 
 These integrations are through **GitHub Copilot**, not the GitHub Models inference API. There is no way to call Claude via `models.github.ai`.
@@ -126,12 +126,12 @@ These integrations are through **GitHub Copilot**, not the GitHub Models inferen
 
 | Platform | Model ID | Endpoint |
 |---|---|---|
-| Anthropic API | `claude-opus-4-6-20250205` | `https://api.anthropic.com/v1/messages` |
-| AWS Bedrock | `anthropic.claude-opus-4-6-20250205-v1:0` | Regional Bedrock endpoints |
-| Google Vertex AI | `claude-opus-4-6@20250205` | Regional Vertex endpoints |
-| Azure AI Foundry | `claude-opus-4-6` | `https://<resource>.services.ai.azure.com/anthropic/v1/messages` |
+| Anthropic API | ` claude-opus-4.6-20250205` | `https://api.anthropic.com/v1/messages` |
+| AWS Bedrock | `anthropic. claude-opus-4.6-20250205-v1:0` | Regional Bedrock endpoints |
+| Google Vertex AI | ` claude-opus-4.6@20250205` | Regional Vertex endpoints |
+| Azure AI Foundry | ` claude-opus-4.6` | `https://<resource>.services.ai.azure.com/anthropic/v1/messages` |
 
-**Source:** [Anthropic Claude on GitHub](https://docs.github.com/en/copilot/concepts/agents/anthropic-claude), [Claude Opus 4.6 changelog](https://github.blog/changelog/2026-02-05-claude-opus-4-6-is-now-generally-available-for-github-copilot/), [Azure AI Foundry Claude docs](https://github.com/MicrosoftDocs/azure-ai-docs/blob/main/articles/foundry/foundry-models/how-to/use-foundry-models-claude.md)
+**Source:** [Anthropic Claude on GitHub](https://docs.github.com/en/copilot/concepts/agents/anthropic-claude), [Claude Opus 4.6 changelog](https://github.blog/changelog/2026-02-05- claude-opus-4.6-is-now-generally-available-for-github-copilot/), [Azure AI Foundry Claude docs](https://github.com/MicrosoftDocs/azure-ai-docs/blob/main/articles/foundry/foundry-models/how-to/use-foundry-models-claude.md)
 
 ---
 

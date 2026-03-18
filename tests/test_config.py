@@ -28,7 +28,7 @@ class TestLoadConfigDefaults:
         assert cfg == DiagramConfig()
         assert cfg.granularity == "package"
         assert cfg.include == ["**/*"]
-        assert cfg.model == "claude-opus-4-6"
+        assert cfg.model == " claude-opus-4.6"
 
     def test_empty_file_returns_defaults(self, project_dir: Path) -> None:
         _write_config(project_dir, "")

@@ -22,8 +22,8 @@ def test_config_error(tmp_path: Path, capsys) -> None:
     assert "Config error" in capsys.readouterr().err
 
 
-def test_missing_gh_binary(tmp_path: Path, capsys) -> None:
-    """CLI handles missing gh binary gracefully."""
+def test_missing_copilot_binary(tmp_path: Path, capsys) -> None:
+    """CLI handles missing copilot binary gracefully."""
     # Create a minimal Python file so analysis produces something
     pkg = tmp_path / "src"
     pkg.mkdir()
@@ -32,7 +32,7 @@ def test_missing_gh_binary(tmp_path: Path, capsys) -> None:
     with patch("diagram_update.llm.shutil.which", return_value=None):
         result = main([str(tmp_path)])
     assert result == 1
-    assert "GitHub CLI" in capsys.readouterr().err
+    assert "Copilot CLI" in capsys.readouterr().err
 
 
 def test_full_pipeline_success(tmp_path: Path, capsys) -> None:
@@ -44,9 +44,9 @@ def test_full_pipeline_success(tmp_path: Path, capsys) -> None:
     fake_components = "COMPONENTS:\n- id: api, label: API, type: service"
     fake_d2 = "api: API\ndb: Database\napi -> db: queries"
 
-    with patch("diagram_update.llm._check_gh_available"):
+    with patch("diagram_update.llm._check_copilot_available"):
         with patch(
-            "diagram_update.llm._call_gh_copilot",
+            "diagram_update.llm._call_copilot",
             side_effect=[
                 fake_components, fake_d2,  # architecture
                 fake_components, fake_d2,  # dependencies
@@ -80,9 +80,9 @@ def test_partial_failure_continues(tmp_path: Path, capsys) -> None:
     fake_components = "COMPONENTS:\n- id: api"
     fake_d2 = "api: API"
 
-    with patch("diagram_update.llm._check_gh_available"):
+    with patch("diagram_update.llm._check_copilot_available"):
         with patch(
-            "diagram_update.llm._call_gh_copilot",
+            "diagram_update.llm._call_copilot",
             side_effect=[
                 fake_components, fake_d2,  # architecture succeeds
                 "",  # dependencies pass1 fails (empty)
@@ -103,8 +103,8 @@ def test_all_diagrams_fail(tmp_path: Path, capsys) -> None:
     pkg.mkdir()
     (pkg / "app.py").write_text("import os\n")
 
-    with patch("diagram_update.llm._check_gh_available"):
-        with patch("diagram_update.llm._call_gh_copilot", return_value=""):
+    with patch("diagram_update.llm._check_copilot_available"):
+        with patch("diagram_update.llm._call_copilot", return_value=""):
             result = main([str(tmp_path)])
 
     assert result == 1
@@ -118,9 +118,9 @@ def test_verbose_flag(tmp_path: Path) -> None:
 
     fake_components = "COMPONENTS:\n- id: a"
     fake_d2 = "a: A"
-    with patch("diagram_update.llm._check_gh_available"):
+    with patch("diagram_update.llm._check_copilot_available"):
         with patch(
-            "diagram_update.llm._call_gh_copilot",
+            "diagram_update.llm._call_copilot",
             side_effect=[fake_components, fake_d2] * 3,
         ):
             result = main([str(tmp_path), "-v"])

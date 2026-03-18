@@ -349,9 +349,9 @@ class TestFullPipelinePython:
     def test_generates_all_diagram_files(self, tmp_path: Path, capsys) -> None:
         _build_python_project(tmp_path)
 
-        with patch("diagram_update.llm._check_gh_available"):
+        with patch("diagram_update.llm._check_copilot_available"):
             with patch(
-                "diagram_update.llm._call_gh_copilot",
+                "diagram_update.llm._call_copilot",
                 side_effect=_mock_llm_side_effects(),
             ):
                 result = main([str(tmp_path)])
@@ -365,9 +365,9 @@ class TestFullPipelinePython:
     def test_architecture_d2_has_nodes_and_edges(self, tmp_path: Path) -> None:
         _build_python_project(tmp_path)
 
-        with patch("diagram_update.llm._check_gh_available"):
+        with patch("diagram_update.llm._check_copilot_available"):
             with patch(
-                "diagram_update.llm._call_gh_copilot",
+                "diagram_update.llm._call_copilot",
                 side_effect=_mock_llm_side_effects(),
             ):
                 main([str(tmp_path)])
@@ -380,9 +380,9 @@ class TestFullPipelinePython:
     def test_sequence_d2_has_sequence_shape(self, tmp_path: Path) -> None:
         _build_python_project(tmp_path)
 
-        with patch("diagram_update.llm._check_gh_available"):
+        with patch("diagram_update.llm._check_copilot_available"):
             with patch(
-                "diagram_update.llm._call_gh_copilot",
+                "diagram_update.llm._call_copilot",
                 side_effect=_mock_llm_side_effects(),
             ):
                 main([str(tmp_path)])
@@ -395,9 +395,9 @@ class TestFullPipelinePython:
         _build_python_project(tmp_path)
 
         for _ in range(2):
-            with patch("diagram_update.llm._check_gh_available"):
+            with patch("diagram_update.llm._check_copilot_available"):
                 with patch(
-                    "diagram_update.llm._call_gh_copilot",
+                    "diagram_update.llm._call_copilot",
                     side_effect=_mock_llm_side_effects(),
                 ):
                     result = main([str(tmp_path)])
@@ -413,9 +413,9 @@ class TestFullPipelineJava:
     def test_generates_diagram_files(self, tmp_path: Path) -> None:
         _build_java_project(tmp_path)
 
-        with patch("diagram_update.llm._check_gh_available"):
+        with patch("diagram_update.llm._check_copilot_available"):
             with patch(
-                "diagram_update.llm._call_gh_copilot",
+                "diagram_update.llm._call_copilot",
                 side_effect=_mock_llm_side_effects(),
             ):
                 result = main([str(tmp_path)])
@@ -437,9 +437,9 @@ class TestFullPipelineJava:
                 return _COMPONENTS_RESPONSE
             return _ARCH_D2
 
-        with patch("diagram_update.llm._check_gh_available"):
+        with patch("diagram_update.llm._check_copilot_available"):
             with patch(
-                "diagram_update.llm._call_gh_copilot",
+                "diagram_update.llm._call_copilot",
                 side_effect=capture_call,
             ):
                 main([str(tmp_path)])
@@ -454,9 +454,9 @@ class TestFullPipelineC:
     def test_generates_diagram_files(self, tmp_path: Path) -> None:
         _build_c_project(tmp_path)
 
-        with patch("diagram_update.llm._check_gh_available"):
+        with patch("diagram_update.llm._check_copilot_available"):
             with patch(
-                "diagram_update.llm._call_gh_copilot",
+                "diagram_update.llm._call_copilot",
                 side_effect=_mock_llm_side_effects(),
             ):
                 result = main([str(tmp_path)])
@@ -476,9 +476,9 @@ class TestFullPipelineC:
                 return _COMPONENTS_RESPONSE
             return _ARCH_D2
 
-        with patch("diagram_update.llm._check_gh_available"):
+        with patch("diagram_update.llm._check_copilot_available"):
             with patch(
-                "diagram_update.llm._call_gh_copilot",
+                "diagram_update.llm._call_copilot",
                 side_effect=capture_call,
             ):
                 main([str(tmp_path)])
@@ -528,9 +528,9 @@ class TestConfigIntegration:
                 return _COMPONENTS_RESPONSE
             return _ARCH_D2
 
-        with patch("diagram_update.llm._check_gh_available"):
+        with patch("diagram_update.llm._check_copilot_available"):
             with patch(
-                "diagram_update.llm._call_gh_copilot",
+                "diagram_update.llm._call_copilot",
                 side_effect=capture_call,
             ):
                 main([str(tmp_path)])
@@ -551,9 +551,9 @@ class TestErrorPathIntegration:
         """Empty project (no source files) doesn't crash."""
         (tmp_path / "README.md").write_text("# Hello\n")
 
-        with patch("diagram_update.llm._check_gh_available"):
+        with patch("diagram_update.llm._check_copilot_available"):
             with patch(
-                "diagram_update.llm._call_gh_copilot",
+                "diagram_update.llm._call_copilot",
                 side_effect=_mock_llm_side_effects(),
             ):
                 result = main([str(tmp_path)])
@@ -565,9 +565,9 @@ class TestErrorPathIntegration:
         _build_python_project(tmp_path)
 
         # Empty pass1 raises LLMError immediately (1 call consumed for deps)
-        with patch("diagram_update.llm._check_gh_available"):
+        with patch("diagram_update.llm._check_copilot_available"):
             with patch(
-                "diagram_update.llm._call_gh_copilot",
+                "diagram_update.llm._call_copilot",
                 side_effect=[
                     _COMPONENTS_RESPONSE, _ARCH_D2,  # arch ok
                     "",                                # deps pass1 fails (empty)
@@ -587,9 +587,9 @@ class TestErrorPathIntegration:
         _build_python_project(tmp_path)
 
         with caplog.at_level(logging.DEBUG):
-            with patch("diagram_update.llm._check_gh_available"):
+            with patch("diagram_update.llm._check_copilot_available"):
                 with patch(
-                    "diagram_update.llm._call_gh_copilot",
+                    "diagram_update.llm._call_copilot",
                     side_effect=_mock_llm_side_effects(),
                 ):
                     result = main([str(tmp_path), "-v"])

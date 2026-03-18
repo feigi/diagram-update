@@ -10,8 +10,8 @@ from diagram_update.llm import (
     _build_pass1_prompt,
     _build_pass2_prompt,
     _parse_response,
-    _call_gh_copilot,
-    _check_gh_available,
+    _call_copilot,
+    _check_copilot_available,
     _retry_generation,
     _validate_d2,
 )
@@ -138,45 +138,20 @@ class TestBuildPass2Prompt:
         assert "Output ONLY valid D2 code" in prompt
 
 
-class TestCheckGhAvailable:
-    """Tests for gh CLI and copilot extension availability check."""
+class TestCheckCopilotAvailable:
+    """Tests for Copilot CLI availability check."""
 
     @patch("diagram_update.llm.shutil.which", return_value=None)
-    def test_missing_gh_raises_tool_error(self, mock_which):
-        with pytest.raises(ToolError, match="GitHub CLI is required"):
-            _check_gh_available()
+    def test_missing_copilot_raises_tool_error(self, mock_which):
+        with pytest.raises(ToolError, match="Copilot CLI is required"):
+            _check_copilot_available()
 
-    @patch("diagram_update.llm.subprocess.run")
-    @patch("diagram_update.llm.shutil.which", return_value="/usr/bin/gh")
-    def test_gh_available_succeeds(self, mock_which, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="gh-copilot\tgithub/gh-copilot", stderr=""
-        )
-        _check_gh_available()  # Should not raise
-
-    @patch("diagram_update.llm.subprocess.run")
-    @patch("diagram_update.llm.shutil.which", return_value="/usr/bin/gh")
-    def test_missing_copilot_extension_raises(self, mock_which, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="gh-dash\tgithub/gh-dash", stderr=""
-        )
-        with pytest.raises(ToolError, match="Copilot extension"):
-            _check_gh_available()
-
-    @patch("diagram_update.llm.subprocess.run")
-    @patch("diagram_update.llm.shutil.which", return_value="/usr/bin/gh")
-    def test_extension_check_timeout_continues(self, mock_which, mock_run):
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="gh", timeout=10)
-        _check_gh_available()  # Should not raise - proceeds on timeout
-
-    @patch("diagram_update.llm.subprocess.run")
-    @patch("diagram_update.llm.shutil.which", return_value="/usr/bin/gh")
-    def test_extension_check_os_error_continues(self, mock_which, mock_run):
-        mock_run.side_effect = OSError("permission denied")
-        _check_gh_available()  # Should not raise - proceeds on OS error
+    @patch("diagram_update.llm.shutil.which", return_value="/usr/local/bin/copilot")
+    def test_copilot_available_succeeds(self, mock_which):
+        _check_copilot_available()  # Should not raise
 
 
-class TestCallGhCopilot:
+class TestCallCopilot:
     """Tests for subprocess invocation."""
 
     @patch("diagram_update.llm.subprocess.run")
@@ -184,23 +159,23 @@ class TestCallGhCopilot:
         mock_run.return_value = MagicMock(
             returncode=0, stdout="api: API", stderr=""
         )
-        result = _call_gh_copilot("test prompt", "claude-opus-4-6")
+        result = _call_copilot("test prompt", " claude-opus-4.6")
         assert result == "api: API"
         cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "gh"
-        assert cmd[1] == "copilot"
+        assert cmd[0] == "copilot"
         assert "-p" in cmd
         assert "test prompt" in cmd
         assert "-s" in cmd
         assert "--model" in cmd
-        assert "claude-opus-4-6" in cmd
+        assert " claude-opus-4.6" in cmd
         assert "--no-ask-user" in cmd
+        assert "--no-custom-instructions" in cmd
 
     @patch("diagram_update.llm.subprocess.run")
     def test_timeout_raises_llm_error(self, mock_run):
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="gh", timeout=60)
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="copilot", timeout=120)
         with pytest.raises(LLMError, match="timed out"):
-            _call_gh_copilot("prompt", "model")
+            _call_copilot("prompt", "model")
 
     @patch("diagram_update.llm.subprocess.run")
     def test_nonzero_exit_raises_llm_error(self, mock_run):
@@ -208,27 +183,27 @@ class TestCallGhCopilot:
             returncode=1, stdout="", stderr="something failed"
         )
         with pytest.raises(LLMError, match="something failed"):
-            _call_gh_copilot("prompt", "model")
+            _call_copilot("prompt", "model")
 
     @patch("diagram_update.llm.subprocess.run")
     def test_auth_error_gives_helpful_message(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=1, stdout="", stderr="not authenticated"
         )
-        with pytest.raises(LLMError, match="gh auth login"):
-            _call_gh_copilot("prompt", "model")
+        with pytest.raises(LLMError, match="copilot login"):
+            _call_copilot("prompt", "model")
 
 
 class TestRetryGeneration:
     """Tests for retry logic on empty/invalid D2 response."""
 
-    @patch("diagram_update.llm._call_gh_copilot")
+    @patch("diagram_update.llm._call_copilot")
     def test_retry_returns_valid_d2(self, mock_call):
         mock_call.return_value = "api: API\napi -> db"
         result = _retry_generation("COMPONENTS:\n- id: api", "architecture", "model")
         assert "api: API" in result
 
-    @patch("diagram_update.llm._call_gh_copilot")
+    @patch("diagram_update.llm._call_copilot")
     def test_retry_includes_error_context(self, mock_call):
         mock_call.return_value = "api: API"
         _retry_generation("components", "architecture", "model")
@@ -236,7 +211,7 @@ class TestRetryGeneration:
         assert "previous attempt" in prompt.lower()
         assert "empty or invalid" in prompt.lower()
 
-    @patch("diagram_update.llm._call_gh_copilot")
+    @patch("diagram_update.llm._call_copilot")
     def test_retry_sequence_mentions_shape(self, mock_call):
         mock_call.return_value = "flow: { shape: sequence_diagram }"
         _retry_generation("components", "sequence", "model")
@@ -247,8 +222,8 @@ class TestRetryGeneration:
 class TestGenerateDiagram:
     """Tests for the full generate_diagram two-pass flow."""
 
-    @patch("diagram_update.llm._call_gh_copilot")
-    @patch("diagram_update.llm._check_gh_available")
+    @patch("diagram_update.llm._call_copilot")
+    @patch("diagram_update.llm._check_copilot_available")
     def test_two_pass_returns_d2(self, mock_check, mock_call):
         # Pass 1 returns components, pass 2 returns D2
         mock_call.side_effect = [
@@ -259,15 +234,15 @@ class TestGenerateDiagram:
         assert result == "api: API\ndb: Database\napi -> db: queries"
         assert mock_call.call_count == 2
 
-    @patch("diagram_update.llm._call_gh_copilot")
-    @patch("diagram_update.llm._check_gh_available")
+    @patch("diagram_update.llm._call_copilot")
+    @patch("diagram_update.llm._check_copilot_available")
     def test_empty_pass1_raises(self, mock_check, mock_call):
         mock_call.return_value = ""
         with pytest.raises(LLMError, match="pass 1"):
             generate_diagram("skeleton text")
 
-    @patch("diagram_update.llm._call_gh_copilot")
-    @patch("diagram_update.llm._check_gh_available")
+    @patch("diagram_update.llm._call_copilot")
+    @patch("diagram_update.llm._check_copilot_available")
     def test_empty_pass2_triggers_retry(self, mock_check, mock_call):
         # Pass 1 returns components, pass 2 returns empty, retry returns D2
         mock_call.side_effect = [
@@ -279,8 +254,8 @@ class TestGenerateDiagram:
         assert "api: API" in result
         assert mock_call.call_count == 3  # pass1 + pass2 + retry
 
-    @patch("diagram_update.llm._call_gh_copilot")
-    @patch("diagram_update.llm._check_gh_available")
+    @patch("diagram_update.llm._call_copilot")
+    @patch("diagram_update.llm._check_copilot_available")
     def test_empty_pass2_and_retry_raises(self, mock_check, mock_call):
         # Pass 1 returns components, pass 2 empty, retry also empty
         mock_call.side_effect = [
@@ -291,8 +266,8 @@ class TestGenerateDiagram:
         with pytest.raises(LLMError, match="after retry"):
             generate_diagram("skeleton text")
 
-    @patch("diagram_update.llm._call_gh_copilot")
-    @patch("diagram_update.llm._check_gh_available")
+    @patch("diagram_update.llm._call_copilot")
+    @patch("diagram_update.llm._check_copilot_available")
     def test_passes_model_parameter(self, mock_check, mock_call):
         mock_call.side_effect = [
             "COMPONENTS:\n- id: api",
@@ -303,8 +278,8 @@ class TestGenerateDiagram:
         for c in mock_call.call_args_list:
             assert c[0][1] == "gpt-4o"
 
-    @patch("diagram_update.llm._call_gh_copilot")
-    @patch("diagram_update.llm._check_gh_available")
+    @patch("diagram_update.llm._call_copilot")
+    @patch("diagram_update.llm._check_copilot_available")
     def test_entry_points_passed_to_pass1(self, mock_check, mock_call):
         mock_call.side_effect = [
             "COMPONENTS:\n- id: api",
@@ -318,8 +293,8 @@ class TestGenerateDiagram:
         pass1_prompt = mock_call.call_args_list[0][0][0]
         assert "src/main.py:main" in pass1_prompt
 
-    @patch("diagram_update.llm._call_gh_copilot")
-    @patch("diagram_update.llm._check_gh_available")
+    @patch("diagram_update.llm._call_copilot")
+    @patch("diagram_update.llm._check_copilot_available")
     def test_sequence_diagram_type(self, mock_check, mock_call):
         mock_call.side_effect = [
             "COMPONENTS:\n- id: client",
@@ -328,8 +303,8 @@ class TestGenerateDiagram:
         result = generate_diagram("skeleton", diagram_type="sequence")
         assert "sequence_diagram" in result
 
-    @patch("diagram_update.llm._call_gh_copilot")
-    @patch("diagram_update.llm._check_gh_available")
+    @patch("diagram_update.llm._call_copilot")
+    @patch("diagram_update.llm._check_copilot_available")
     def test_d2_with_no_nodes_raises(self, mock_check, mock_call):
         # Pass 1 returns components, pass 2 returns only comments/empty lines
         mock_call.side_effect = [

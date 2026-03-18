@@ -22,7 +22,7 @@ class TestDiagramConfig:
         assert "tests/**" in config.exclude
         assert config.granularity == "package"
         assert config.entry_points == []
-        assert config.model == "claude-opus-4-6"
+        assert config.model == " claude-opus-4.6"
 
     def test_custom_values(self):
         config = DiagramConfig(

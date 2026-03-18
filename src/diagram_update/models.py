@@ -22,7 +22,7 @@ class DiagramConfig:
     )
     granularity: str = "package"
     entry_points: list[str] = field(default_factory=list)
-    model: str = "claude-opus-4-6"
+    model: str = " claude-opus-4.6"
 
 
 @dataclass
