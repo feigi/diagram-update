@@ -126,7 +126,7 @@
 
 **Implementation guidance:**
 - Implement `generate_skeleton()` in `skeleton.py`: produce a simplified skeleton with annotated file tree and dependency edges (defer signature ranking to Step 9)
-- Implement `generate_diagram()` in `llm.py`: invoke `gh copilot -p "..." -s --model  claude-opus-4.6 --no-ask-user` via `subprocess.run`
+- Implement `generate_diagram()` in `llm.py`: invoke `gh copilot -p "..." -s --model   claude-sonnet-4.6 --no-ask-user` via `subprocess.run`
 - Start with a single-pass LLM call (combined component identification and D2 generation) to get something working quickly; refine to two-pass in Step 10
 - Implement basic response parsing: strip whitespace, remove markdown fences
 - Check for `gh` binary availability before calling

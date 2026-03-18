@@ -28,7 +28,7 @@ The tool supports Python, Java, and C codebases and produces three diagram types
 
 4. **Codebase analysis approach:** Hybrid. Static analysis extracts file structure and imports cheaply. The resulting skeleton (not raw code) is sent to the LLM for component identification and diagram generation. This avoids sending entire codebases while letting the LLM handle higher-level architectural interpretation.
 
-5. **LLM provider:** Claude Opus 4.6 via GitHub Copilot CLI, invoked as `gh copilot -p "..." -s --model  claude-opus-4.6 --no-ask-user`. The `-s` flag strips decoration for scriptable plain-text output. No JSON mode is available, so prompts must instruct the model to output only D2 code.
+5. **LLM provider:** Claude Opus 4.6 via GitHub Copilot CLI, invoked as `gh copilot -p "..." -s --model   claude-sonnet-4.6 --no-ask-user`. The `-s` flag strips decoration for scriptable plain-text output. No JSON mode is available, so prompts must instruct the model to output only D2 code.
 
 6. **Update stability:** Anchor-based. Each component gets a stable ID derived from its code path (e.g., `src.auth.service` -> node key `auth_service`). On re-run, keys are compared against the existing D2 file. New nodes are added, deleted nodes removed, changed edges updated. Existing node ordering and layout hints are preserved.
 
@@ -120,7 +120,7 @@ flowchart TD
 | `exclude` | `list[str]` | `["tests/**", "test/**", "vendor/**", "node_modules/**", ".git/**"]` | Glob patterns to exclude |
 | `granularity` | `str` | `"package"` | Component grouping level: `"directory"`, `"package"`, or `"module"` |
 | `entry_points` | `list[str]` | `[]` | Override LLM-inferred flow entry points (e.g., `["src/main.py:main"]`) |
-| `model` | `str` | `" claude-opus-4.6"` | Model override for `gh copilot --model` |
+| `model` | `str` | `"  claude-sonnet-4.6"` | Model override for `gh copilot --model` |
 
 **Example config file (`.diagram-update.yml`):**
 
@@ -146,8 +146,8 @@ entry_points:
   - "src/main.py:main"
   - "src/api/app.py:create_app"
 
-# LLM model (default:  claude-opus-4.6)
-# model:  claude-opus-4.6
+# LLM model (default:   claude-sonnet-4.6)
+# model:   claude-sonnet-4.6
 ```
 
 **Interface:**
@@ -292,7 +292,7 @@ def generate_skeleton(
 **Invocation:**
 
 ```bash
-gh copilot -p "<prompt>" -s --model  claude-opus-4.6 --no-ask-user
+gh copilot -p "<prompt>" -s --model   claude-sonnet-4.6 --no-ask-user
 ```
 
 - `-s` strips ANSI formatting for scriptable plain-text output
@@ -363,7 +363,7 @@ def generate_diagram(
     skeleton: str,
     diagram_type: str,           # "architecture" | "dependencies" | "sequence"
     existing_d2: str | None,     # Existing diagram content for merge context
-    model: str = " claude-opus-4.6",
+    model: str = "  claude-sonnet-4.6",
 ) -> str:
     """
     Generate D2 diagram code via gh copilot CLI.
@@ -732,7 +732,7 @@ The "dummy project" approach from the requirements:
 **GitHub Models API:**
 - Claude models are NOT available through the GitHub Models API. The API supports OpenAI, Meta, DeepSeek, Microsoft, and xAI models only.
 - Claude IS available through GitHub Copilot (as a model choice for Pro/Business/Enterprise users).
-- The `gh copilot -p "..." -s --model  claude-opus-4.6 --no-ask-user` command provides scriptable access to Claude via Copilot.
+- The `gh copilot -p "..." -s --model   claude-sonnet-4.6 --no-ask-user` command provides scriptable access to Claude via Copilot.
 - No JSON mode or structured output is available through `gh copilot` -- prompts must request specific output formats.
 
 **Static Analysis:**

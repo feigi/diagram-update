@@ -159,7 +159,7 @@ class TestCallCopilot:
         mock_run.return_value = MagicMock(
             returncode=0, stdout="api: API", stderr=""
         )
-        result = _call_copilot("test prompt", " claude-opus-4.6")
+        result = _call_copilot("test prompt", "claude-sonnet-4.6")
         assert result == "api: API"
         cmd = mock_run.call_args[0][0]
         assert cmd[0] == "copilot"
@@ -167,7 +167,7 @@ class TestCallCopilot:
         assert "test prompt" in cmd
         assert "-s" in cmd
         assert "--model" in cmd
-        assert " claude-opus-4.6" in cmd
+        assert "claude-sonnet-4.6" in cmd
         assert "--no-ask-user" in cmd
         assert "--no-custom-instructions" in cmd
 

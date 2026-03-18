@@ -26,7 +26,7 @@
 ## Key Decisions
 
 - **D2** output format (best layout quality, token efficiency, key-based stability)
-- **GitHub Copilot CLI** as LLM provider (`gh copilot -p -s --model  claude-opus-4.6 --no-ask-user`)
+- **GitHub Copilot CLI** as LLM provider (`gh copilot -p -s --model   claude-sonnet-4.6 --no-ask-user`)
 - **Hybrid analysis**: static extraction (imports/file structure) + LLM interpretation
 - **Python, Java, C** language support for v1
 - **Three diagram types**: high-level architecture, package/module dependencies, sequence/flow

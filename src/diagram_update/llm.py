@@ -22,7 +22,7 @@ def generate_diagram(
     skeleton: str,
     diagram_type: str = "architecture",
     existing_d2: str | None = None,
-    model: str = " claude-opus-4.6",
+    model: str = "claude-sonnet-4.6",
     entry_points: list[str] | None = None,
 ) -> str:
     """Generate D2 diagram code via GitHub Copilot CLI.

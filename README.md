@@ -78,7 +78,7 @@ entry_points:
   - "src/main.py:main"
 
 # LLM model to use
-model:  claude-opus-4.6
+model: claude-sonnet-4.6
 ```
 
 All fields are optional -- without a config file, sensible defaults are used.
