@@ -16,6 +16,8 @@ from diagram_update.models import (
     Relationship,
 )
 
+from .c_parser import parse_c_file
+from .java_parser import extract_package, parse_java_file
 from .python_parser import parse_python_file
 
 logger = logging.getLogger(__name__)
@@ -115,6 +117,10 @@ def _parse_imports(files: dict[str, FileInfo], project_root: Path) -> None:
         full_path = project_root / rel_str
         if file_info.language == "python":
             file_info.imports = parse_python_file(full_path)
+        elif file_info.language == "java":
+            file_info.imports = parse_java_file(full_path)
+        elif file_info.language == "c":
+            file_info.imports = parse_c_file(full_path)
 
 
 def _resolve_imports(files: dict[str, FileInfo], project_root: Path) -> None:
@@ -129,16 +135,40 @@ def _resolve_imports(files: dict[str, FileInfo], project_root: Path) -> None:
             if dotted:
                 module_to_path[dotted] = rel_str
 
+    # Detect Java source roots (directories containing src/main/java/)
+    java_source_roots = _detect_java_source_roots(internal_paths)
+
     for rel_str, file_info in files.items():
-        if file_info.language != "python":
-            continue
-        for imp in file_info.imports:
-            resolved = _resolve_python_import(imp, rel_str, module_to_path, internal_paths)
-            if resolved:
-                imp.is_internal = True
-                imp.resolved_path = Path(resolved)
-            else:
-                imp.is_internal = False
+        if file_info.language == "python":
+            for imp in file_info.imports:
+                resolved = _resolve_python_import(
+                    imp, rel_str, module_to_path, internal_paths
+                )
+                if resolved:
+                    imp.is_internal = True
+                    imp.resolved_path = Path(resolved)
+                else:
+                    imp.is_internal = False
+        elif file_info.language == "java":
+            for imp in file_info.imports:
+                resolved = _resolve_java_import(
+                    imp, internal_paths, java_source_roots
+                )
+                if resolved:
+                    imp.is_internal = True
+                    imp.resolved_path = Path(resolved)
+                else:
+                    imp.is_internal = False
+        elif file_info.language == "c":
+            for imp in file_info.imports:
+                resolved = _resolve_c_include(
+                    imp, rel_str, internal_paths
+                )
+                if resolved:
+                    imp.is_internal = True
+                    imp.resolved_path = Path(resolved)
+                else:
+                    imp.is_internal = False
 
 
 def _path_to_dotted(rel_path: str) -> str | None:
@@ -202,6 +232,87 @@ def _resolve_python_import(
                 return module_to_path[prefix]
 
         return None
+
+
+def _detect_java_source_roots(internal_paths: set[str]) -> list[str]:
+    """Detect Java source root prefixes (e.g., 'src/main/java/')."""
+    roots: set[str] = set()
+    for p in internal_paths:
+        if not p.endswith(".java"):
+            continue
+        # Look for src/main/java/ pattern
+        idx = p.find("src/main/java/")
+        if idx != -1:
+            roots.add(p[: idx + len("src/main/java/")])
+        else:
+            # Also check src/ as a common source root
+            idx = p.find("src/")
+            if idx != -1:
+                roots.add(p[: idx + len("src/")])
+    return sorted(roots)
+
+
+def _resolve_java_import(
+    imp: ImportInfo,
+    internal_paths: set[str],
+    source_roots: list[str],
+) -> str | None:
+    """Resolve a Java import to an internal file path.
+
+    Converts dotted package path to file path and checks against known files.
+    """
+    # System includes are never internal
+    if "system" in imp.names:
+        return None
+
+    # Convert com.example.Foo -> com/example/Foo.java
+    file_path = imp.module.replace(".", "/") + ".java"
+
+    # Try each source root
+    for root in source_roots:
+        candidate = root + file_path
+        if candidate in internal_paths:
+            return candidate
+
+    # Try without source root (files at project root or flat layout)
+    if file_path in internal_paths:
+        return file_path
+
+    return None
+
+
+def _resolve_c_include(
+    imp: ImportInfo,
+    including_file: str,
+    internal_paths: set[str],
+) -> str | None:
+    """Resolve a C #include to an internal file path.
+
+    For local includes ("..."), resolves relative to the including file first,
+    then tries the path as-is from project root.
+    System includes (<...>) are marked external.
+    """
+    # System includes are never internal
+    if "system" in imp.names:
+        return None
+
+    include_path = imp.module
+
+    # Try relative to the including file's directory
+    including_dir = str(Path(including_file).parent)
+    if including_dir == ".":
+        relative_candidate = include_path
+    else:
+        relative_candidate = including_dir + "/" + include_path
+
+    if relative_candidate in internal_paths:
+        return relative_candidate
+
+    # Try from project root
+    if include_path in internal_paths:
+        return include_path
+
+    return None
 
 
 def _group_into_components(

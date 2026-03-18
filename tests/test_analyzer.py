@@ -9,10 +9,13 @@ import pytest
 from diagram_update.analyzer import (
     _build_relationships,
     _compute_component_id,
+    _detect_java_source_roots,
     _group_into_components,
     _matches_any,
     _path_to_dotted,
+    _resolve_c_include,
     _resolve_imports,
+    _resolve_java_import,
     _walk_files,
     analyze,
 )
@@ -363,3 +366,174 @@ class TestAnalyze:
         config = DiagramConfig(include=["**/*"], exclude=[], granularity="module")
         graph = analyze(config, tmp_path)
         assert len(graph.components) == 2
+
+
+# --- Java resolution tests ---
+
+
+class TestJavaImportResolution:
+    def _make_files(self, paths: list[str], tmp_path: Path) -> dict[str, FileInfo]:
+        files: dict[str, FileInfo] = {}
+        for p in paths:
+            full = tmp_path / p
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text("")
+            files[p] = FileInfo(path=Path(p), language="java")
+        return files
+
+    def test_resolve_with_source_root(self):
+        internal_paths = {
+            "src/main/java/com/example/Foo.java",
+            "src/main/java/com/example/Bar.java",
+        }
+        roots = _detect_java_source_roots(internal_paths)
+        assert "src/main/java/" in roots
+
+        imp = ImportInfo(module="com.example.Foo")
+        result = _resolve_java_import(imp, internal_paths, roots)
+        assert result == "src/main/java/com/example/Foo.java"
+
+    def test_resolve_without_source_root(self):
+        internal_paths = {"com/example/Foo.java"}
+        imp = ImportInfo(module="com.example.Foo")
+        result = _resolve_java_import(imp, internal_paths, [])
+        assert result == "com/example/Foo.java"
+
+    def test_external_import_not_resolved(self):
+        internal_paths = {"src/main/java/com/example/Foo.java"}
+        roots = _detect_java_source_roots(internal_paths)
+        imp = ImportInfo(module="java.util.List")
+        result = _resolve_java_import(imp, internal_paths, roots)
+        assert result is None
+
+    def test_detect_src_root(self):
+        paths = {
+            "src/main/java/com/example/Foo.java",
+            "src/main/java/com/example/bar/Bar.java",
+        }
+        roots = _detect_java_source_roots(paths)
+        assert roots == ["src/main/java/"]
+
+    def test_java_full_pipeline(self, tmp_path: Path):
+        """Integration test: analyze a small Java project."""
+        pkg1 = tmp_path / "src" / "main" / "java" / "com" / "example"
+        pkg2 = tmp_path / "src" / "main" / "java" / "com" / "example" / "util"
+        pkg1.mkdir(parents=True)
+        pkg2.mkdir(parents=True)
+
+        (pkg1 / "App.java").write_text(
+            "package com.example;\n\n"
+            "import com.example.util.Helper;\n\n"
+            "public class App {}\n"
+        )
+        (pkg2 / "Helper.java").write_text(
+            "package com.example.util;\n\n"
+            "public class Helper {}\n"
+        )
+
+        config = DiagramConfig(include=["**/*"], exclude=[], granularity="package")
+        graph = analyze(config, tmp_path)
+
+        assert "java" in graph.languages
+        assert len(graph.files) == 2
+        # Should have a relationship from example to example.util
+        assert len(graph.relationships) >= 1
+
+
+# --- C resolution tests ---
+
+
+class TestCIncludeResolution:
+    def test_resolve_relative_include(self):
+        internal_paths = {"src/utils.h", "src/main.c"}
+        imp = ImportInfo(module="utils.h", names=[])
+        result = _resolve_c_include(imp, "src/main.c", internal_paths)
+        assert result == "src/utils.h"
+
+    def test_resolve_path_based_include(self):
+        internal_paths = {"src/main.c", "lib/helpers.h"}
+        imp = ImportInfo(module="lib/helpers.h", names=[])
+        result = _resolve_c_include(imp, "src/main.c", internal_paths)
+        # Should find from project root
+        assert result == "lib/helpers.h"
+
+    def test_system_include_not_resolved(self):
+        internal_paths = {"src/main.c"}
+        imp = ImportInfo(module="stdio.h", names=["system"])
+        result = _resolve_c_include(imp, "src/main.c", internal_paths)
+        assert result is None
+
+    def test_resolve_in_same_directory(self):
+        internal_paths = {"config.h", "main.c"}
+        imp = ImportInfo(module="config.h", names=[])
+        result = _resolve_c_include(imp, "main.c", internal_paths)
+        assert result == "config.h"
+
+    def test_c_full_pipeline(self, tmp_path: Path):
+        """Integration test: analyze a small C project."""
+        src = tmp_path / "src"
+        lib = tmp_path / "lib"
+        src.mkdir()
+        lib.mkdir()
+
+        (src / "main.c").write_text(
+            '#include <stdio.h>\n'
+            '#include "main.h"\n'
+            '#include "../lib/utils.h"\n'
+        )
+        (src / "main.h").write_text(
+            '#ifndef MAIN_H\n#define MAIN_H\n#endif\n'
+        )
+        (lib / "utils.h").write_text(
+            '#ifndef UTILS_H\n#define UTILS_H\nvoid help();\n#endif\n'
+        )
+        (lib / "utils.c").write_text(
+            '#include "utils.h"\nvoid help() {}\n'
+        )
+
+        config = DiagramConfig(include=["**/*"], exclude=[], granularity="directory")
+        graph = analyze(config, tmp_path)
+
+        assert "c" in graph.languages
+        assert len(graph.files) == 4
+
+    def test_mixed_language_project(self, tmp_path: Path):
+        """Integration test: project with Python and C files."""
+        (tmp_path / "main.py").write_text("import os\n")
+        (tmp_path / "helper.c").write_text('#include <stdlib.h>\n')
+        (tmp_path / "helper.h").write_text('#ifndef H\n#define H\n#endif\n')
+
+        config = DiagramConfig(include=["**/*"], exclude=[], granularity="module")
+        graph = analyze(config, tmp_path)
+
+        assert "python" in graph.languages
+        assert "c" in graph.languages
+
+
+# --- Component ID for Java/C ---
+
+
+class TestComputeComponentIdJavaC:
+    def test_java_package_granularity(self):
+        result = _compute_component_id(
+            "com/example/util/Helper.java", "package", "java"
+        )
+        assert result == "com.example.util"
+
+    def test_java_directory_granularity(self):
+        result = _compute_component_id(
+            "src/main/java/Foo.java", "directory", "java"
+        )
+        assert result == "src"
+
+    def test_c_package_granularity(self):
+        result = _compute_component_id("src/utils/helper.c", "package", "c")
+        assert result == "src.utils"
+
+    def test_c_directory_granularity(self):
+        result = _compute_component_id("src/helper.c", "directory", "c")
+        assert result == "src"
+
+    def test_c_module_granularity(self):
+        result = _compute_component_id("src/helper.c", "module", "c")
+        assert result == "src.helper"
