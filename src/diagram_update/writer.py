@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 
 from diagram_update.merger import check_removal_threshold, merge_diagrams
@@ -70,6 +72,32 @@ def write_diagram(
         output_path.write_text(full_content, encoding="utf-8")
 
     return output_path
+
+
+def render_png(d2_path: Path) -> Path | None:
+    """Render a D2 file to PNG using the `d2` CLI.
+
+    Returns the PNG path on success, or None if `d2` is not installed or
+    rendering fails.
+    """
+    if not shutil.which("d2"):
+        logger.warning("d2 CLI not found — skipping PNG render of %s", d2_path)
+        return None
+
+    png_path = d2_path.with_suffix(".png")
+    try:
+        subprocess.run(
+            ["d2", str(d2_path), str(png_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.warning("d2 render failed for %s: %s", d2_path, exc.stderr.strip())
+        return None
+
+    logger.info("Rendered PNG to %s", png_path)
+    return png_path
 
 
 def _get_filename(diagram_type: str, flow_name: str | None) -> str:

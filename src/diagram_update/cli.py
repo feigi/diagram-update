@@ -13,7 +13,7 @@ from diagram_update.config import load_config
 from diagram_update.llm import generate_diagram
 from diagram_update.models import ConfigError, LLMError, ToolError
 from diagram_update.skeleton import generate_skeleton
-from diagram_update.writer import write_diagram
+from diagram_update.writer import render_png, write_diagram
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,9 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("[4/4] Writing %s diagram ...", diagram_type)
         output_path = write_diagram(d2_code, diagram_type, project_root)
         print(f"Wrote {output_path}")
+        png_path = render_png(output_path)
+        if png_path:
+            print(f"Rendered {png_path}")
 
     elapsed = time.monotonic() - t0
     print(f"Done in {elapsed:.1f}s")
