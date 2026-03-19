@@ -41,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
     # CLI flag overrides config
     if args.token_budget is not None:
         config.token_budget = args.token_budget
+    if args.timeout is not None:
+        config.timeout = args.timeout
 
     logger.info("[1/4] Analyzing %s ...", project_root)
     graph = analyze(config, project_root)
@@ -83,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
                 existing_d2=existing_d2,
                 model=config.model,
                 entry_points=config.entry_points or None,
+                timeout=config.timeout,
             )
         except (ToolError, LLMError) as exc:
             print(f"Error ({diagram_type}): {exc}", file=sys.stderr)
@@ -124,6 +127,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         type=int,
         default=None,
         help="Token budget for codebase skeleton (default: from config or 30000)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="Timeout in seconds for each LLM call (default: from config or 300)",
     )
     return parser.parse_args(argv)
 

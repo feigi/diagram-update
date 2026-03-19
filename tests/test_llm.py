@@ -186,9 +186,16 @@ class TestCallCopilot:
 
     @patch("diagram_update.llm.subprocess.run")
     def test_timeout_raises_llm_error(self, mock_run):
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="copilot", timeout=120)
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="copilot", timeout=300)
         with pytest.raises(LLMError, match="timed out"):
             _call_copilot("prompt", "model")
+
+    @patch("diagram_update.llm.subprocess.run")
+    def test_custom_timeout_is_passed_to_subprocess(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="a: A", stderr="")
+        _call_copilot("prompt", "model", timeout=60)
+        _, kwargs = mock_run.call_args
+        assert kwargs["timeout"] == 60
 
     @patch("diagram_update.llm.subprocess.run")
     def test_nonzero_exit_raises_llm_error(self, mock_run):

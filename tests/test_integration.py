@@ -438,7 +438,7 @@ class TestFullPipelineJava:
         _build_java_project(tmp_path)
         captured_prompts: list[str] = []
 
-        def capture_call(prompt, model):
+        def capture_call(prompt, model, **kwargs):
             captured_prompts.append(prompt)
             # Alternate component and D2 responses
             if len(captured_prompts) % 2 == 1:
@@ -478,7 +478,7 @@ class TestFullPipelineC:
         _build_c_project(tmp_path)
         captured_prompts: list[str] = []
 
-        def capture_call(prompt, model):
+        def capture_call(prompt, model, **kwargs):
             captured_prompts.append(prompt)
             if len(captured_prompts) % 2 == 1:
                 return _COMPONENTS_RESPONSE
@@ -530,7 +530,7 @@ class TestConfigIntegration:
 
         captured_prompts: list[str] = []
 
-        def capture_call(prompt, model):
+        def capture_call(prompt, model, **kwargs):
             captured_prompts.append(prompt)
             if len(captured_prompts) % 2 == 1:
                 return _COMPONENTS_RESPONSE

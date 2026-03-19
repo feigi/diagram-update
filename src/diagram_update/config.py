@@ -15,7 +15,7 @@ CONFIG_FILENAME = ".diagram-update.yml"
 
 VALID_GRANULARITIES = {"directory", "package", "module"}
 
-_KNOWN_KEYS = {"include", "exclude", "granularity", "entry_points", "model", "token_budget"}
+_KNOWN_KEYS = {"include", "exclude", "granularity", "entry_points", "model", "token_budget", "timeout"}
 
 
 def load_config(project_root: Path) -> DiagramConfig:
@@ -95,6 +95,15 @@ def _build_config(data: dict, config_path: Path) -> DiagramConfig:
                 f"must be an integer >= 1000"
             )
         kwargs["token_budget"] = val
+
+    if "timeout" in data:
+        val = data["timeout"]
+        if not isinstance(val, int) or val < 10:
+            raise ConfigError(
+                f"Invalid timeout {val!r} in {config_path}; "
+                f"must be an integer >= 10"
+            )
+        kwargs["timeout"] = val
 
     return DiagramConfig(**kwargs)
 

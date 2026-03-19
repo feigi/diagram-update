@@ -27,6 +27,7 @@ def generate_diagram(
     existing_d2: str | None = None,
     model: str = "claude-sonnet-4.6",
     entry_points: list[str] | None = None,
+    timeout: int = 300,
 ) -> str:
     """Generate D2 diagram code via GitHub Copilot CLI.
 
@@ -42,7 +43,7 @@ def generate_diagram(
     logger.info("Pass 1: identifying %s components...", diagram_type)
     pass1_prompt = _build_pass1_prompt(skeleton, diagram_type, entry_points, existing_d2)
     logger.debug("Pass 1 prompt length: %d chars", len(pass1_prompt))
-    components_text = _call_copilot(pass1_prompt, model)
+    components_text = _call_copilot(pass1_prompt, model, timeout=timeout)
     components_text = _parse_response(components_text)
 
     if not components_text.strip():
@@ -61,13 +62,13 @@ def generate_diagram(
         components_text, diagram_type, existing_d2,
     )
     logger.debug("Pass 2 prompt length: %d chars", len(pass2_prompt))
-    raw = _call_copilot(pass2_prompt, model)
+    raw = _call_copilot(pass2_prompt, model, timeout=timeout)
     d2 = _parse_response(raw)
 
     if not d2.strip():
         # Retry once with error correction prompt
         logger.warning("Empty D2 response, retrying with error correction prompt")
-        d2 = _retry_generation(components_text, diagram_type, model)
+        d2 = _retry_generation(components_text, diagram_type, model, timeout=timeout)
 
     if not d2.strip():
         raise LLMError("Empty response from copilot after retry")
@@ -260,6 +261,7 @@ def _retry_generation(
     components_text: str,
     diagram_type: str,
     model: str,
+    timeout: int = 300,
 ) -> str:
     """Retry D2 generation with an error correction prompt."""
     prompt = (
@@ -278,7 +280,7 @@ def _retry_generation(
         )
     prompt += "\nOutput ONLY valid D2 code. No markdown fences, no explanations."
 
-    raw = _call_copilot(prompt, model)
+    raw = _call_copilot(prompt, model, timeout=timeout)
     return _parse_response(raw)
 
 
@@ -426,8 +428,15 @@ def _extract_skeleton_edges(skeleton: str) -> list[tuple[str, str]]:
     return edges
 
 
-def _call_copilot(prompt: str, model: str) -> str:
-    """Invoke GitHub Copilot CLI in non-interactive mode and return output."""
+def _call_copilot(prompt: str, model: str, timeout: int = 300) -> str:
+    """Invoke GitHub Copilot CLI in non-interactive mode and return output.
+
+    When stdout is a TTY the output is streamed into a transient Rich panel
+    (visible while running, cleared on completion). Otherwise output is
+    captured silently, e.g. when piped or in automated environments.
+    """
+    import sys
+
     cmd = [
         "copilot",
         "-p", prompt,
@@ -437,15 +446,18 @@ def _call_copilot(prompt: str, model: str) -> str:
         "--no-custom-instructions",
     ]
 
+    if sys.stdout.isatty():
+        return _stream_copilot_live(cmd, timeout)
+
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        raise LLMError("copilot timed out after 120s")
+        raise LLMError(f"copilot timed out after {timeout}s")
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
@@ -458,6 +470,80 @@ def _call_copilot(prompt: str, model: str) -> str:
 
     logger.debug("copilot returned %d chars", len(result.stdout))
     return result.stdout
+
+
+def _stream_copilot_live(cmd: list[str], timeout: int) -> str:
+    """Stream copilot stdout into a transient Rich panel, return captured text.
+
+    The panel is erased from the terminal once the subprocess exits, keeping
+    the scroll-back clean while still letting the user see progress.
+    """
+    import threading
+    import time
+
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.text import Text
+
+    collected: list[str] = []
+    stderr_lines: list[str] = []
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError:
+        raise LLMError("copilot not found on PATH")
+
+    def _read_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            stderr_lines.append(line)
+        proc.stderr.close()
+
+    stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+    stderr_thread.start()
+
+    deadline = time.monotonic() + timeout
+    timed_out = False
+
+    try:
+        with Live(Panel("", title="[bold cyan]Copilot[/]"), transient=True, refresh_per_second=10) as live:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                collected.append(line)
+                tail = "".join(collected[-20:]).strip()
+                live.update(Panel(Text(tail), title="[bold cyan]Copilot[/]"))
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    timed_out = True
+                    break
+    finally:
+        proc.stdout.close()
+
+    if timed_out:
+        raise LLMError(f"copilot timed out after {timeout}s")
+
+    stderr_thread.join(timeout=5)
+    proc.wait()
+
+    returncode = proc.returncode
+    stdout = "".join(collected)
+    stderr = "".join(stderr_lines).strip()
+
+    if returncode != 0:
+        logger.debug("copilot stderr: %s", stderr)
+        if "not authenticated" in stderr.lower() or "token expired" in stderr.lower():
+            raise LLMError(
+                "GitHub authentication failed. Run 'copilot login' to authenticate."
+            )
+        raise LLMError(f"copilot failed (exit {returncode}): {stderr}")
+
+    logger.debug("copilot returned %d chars", len(stdout))
+    return stdout
 
 
 def _parse_response(raw: str) -> str:
