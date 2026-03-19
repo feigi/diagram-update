@@ -37,7 +37,7 @@ def generate_diagram(
 
     # Pass 1: Identify components and relationships
     logger.info("Pass 1: identifying %s components...", diagram_type)
-    pass1_prompt = _build_pass1_prompt(skeleton, diagram_type, entry_points)
+    pass1_prompt = _build_pass1_prompt(skeleton, diagram_type, entry_points, existing_d2)
     logger.debug("Pass 1 prompt length: %d chars", len(pass1_prompt))
     components_text = _call_copilot(pass1_prompt, model)
     components_text = _parse_response(components_text)
@@ -86,6 +86,7 @@ def _build_pass1_prompt(
     skeleton: str,
     diagram_type: str,
     entry_points: list[str] | None = None,
+    existing_d2: str | None = None,
 ) -> str:
     """Build the Pass 1 prompt for component identification."""
     parts = [
@@ -119,6 +120,15 @@ def _build_pass1_prompt(
                 "\n\nInfer the top 5 most significant entry points or call flows. "
                 "Show the sequence of interactions between components for each flow."
             )
+
+    if existing_d2:
+        parts.extend([
+            "\n\nIMPORTANT: An existing diagram already exists with established component "
+            "IDs and groupings. You MUST reuse the same component IDs (keys) and group "
+            "structure. Only add new components or remove ones that no longer exist in "
+            "the codebase. Here is the existing diagram:\n",
+            existing_d2,
+        ])
 
     parts.extend([
         "\n\nOutput a structured list:",

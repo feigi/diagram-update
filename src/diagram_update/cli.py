@@ -50,12 +50,18 @@ def main(argv: list[str] | None = None) -> int:
     logger.debug("Skeleton length: %d chars", len(skeleton))
 
     errors = 0
+    diagrams_dir = project_root / "docs" / "diagrams"
     for diagram_type in _DIAGRAM_TYPES:
         print(f"Generating {diagram_type} diagram ...")
+
+        # Read existing diagram so the LLM can preserve node keys
+        existing_d2 = _read_existing_diagram(diagrams_dir, diagram_type)
+
         try:
             d2_code = generate_diagram(
                 skeleton,
                 diagram_type=diagram_type,
+                existing_d2=existing_d2,
                 model=config.model,
                 entry_points=config.entry_points or None,
             )
@@ -94,6 +100,22 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Enable verbose logging",
     )
     return parser.parse_args(argv)
+
+
+def _read_existing_diagram(diagrams_dir: Path, diagram_type: str) -> str | None:
+    """Read an existing diagram file if present, for LLM context."""
+    filenames = {
+        "architecture": "architecture.d2",
+        "dependencies": "dependencies.d2",
+    }
+    filename = filenames.get(diagram_type, f"{diagram_type}.d2")
+    path = diagrams_dir / filename
+    if path.exists():
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+    return None
 
 
 def _setup_logging(verbose: bool) -> None:
