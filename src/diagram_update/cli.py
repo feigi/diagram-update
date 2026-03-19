@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from pathlib import Path
 
 from diagram_update.analyzer import analyze
@@ -22,6 +23,7 @@ _DIAGRAM_TYPES = ["architecture", "dependencies", "sequence"]
 
 def main(argv: list[str] | None = None) -> int:
     """Run the diagram-update pipeline."""
+    t0 = time.monotonic()
     args = _parse_args(argv)
     _setup_logging(args.verbose)
 
@@ -36,19 +38,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Config error: {exc}", file=sys.stderr)
         return 1
 
-    logger.info("Analyzing %s ...", project_root)
+    print(f"Analyzing {project_root} ...")
     graph = analyze(config, project_root)
-    logger.info(
-        "Found %d components, %d relationships",
-        len(graph.components),
-        len(graph.relationships),
+    print(
+        f"Found {len(graph.components)} components, "
+        f"{len(graph.relationships)} relationships"
     )
 
+    print("Building codebase skeleton ...")
     skeleton = generate_skeleton(graph, project_root)
-    logger.info("Generated skeleton (%d chars)", len(skeleton))
+    logger.debug("Skeleton length: %d chars", len(skeleton))
 
     errors = 0
     for diagram_type in _DIAGRAM_TYPES:
+        print(f"Generating {diagram_type} diagram ...")
         try:
             d2_code = generate_diagram(
                 skeleton,
@@ -63,6 +66,9 @@ def main(argv: list[str] | None = None) -> int:
 
         output_path = write_diagram(d2_code, diagram_type, project_root)
         print(f"Wrote {output_path}")
+
+    elapsed = time.monotonic() - t0
+    print(f"Done in {elapsed:.1f}s")
 
     if errors == len(_DIAGRAM_TYPES):
         return 1
