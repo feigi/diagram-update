@@ -1,21 +1,39 @@
 
-## Iteration: review.start (2026-03-19)
+## Iteration 1 — Primary Review Pass
 
-### Context
-Reviewing commit 195ec66 which strengthened D2 validation, determinism prompts, and skeleton edge matching.
-Goal: maximize correctness (diagram reflects reality) and drift reduction (diagram stable over changes).
+### Goal
+Review diagram-update tool for correctness + drift reduction.
 
-### Key Findings
-1. **CRITICAL**: `_extract_pass1_ids()` extracts component IDs but they are NEVER passed to `_build_pass2_prompt`. The "cross-pass consistency" is logging only, not enforcement.
-2. **CRITICAL**: `_build_pass1_update_prompt` (update mode = most common path) is missing the alphabetical sort instructions added to `_build_pass1_prompt`.
-3. **SUGGESTION**: `_check_balanced_braces` is string-literal unaware (low practical risk).
-4. **SUGGESTION**: `_check_edge_endpoints` typed as `object` (duck typing, no safety).
-5. **SUGGESTION**: `_check_skeleton_coverage` leaf-name fallback partially reintroduces the issue it was fixing.
+### Top findings
+1. **`_matches_any()` broken `**` glob** — patterns like `**/vendor/**` are silently
+   ignored; only bare `"**/*"` and `prefix/**` patterns work. This lets excluded
+   files pollute the dependency graph → wrong diagram.
 
-### Highest-Risk Area for Deep Analysis
-Gap between claimed behavior ("cross-pass consistency") and actual implementation (IDs extracted but unused).
-Plus update prompt lacking alphabetical ordering (most common production path).
+2. **`_compute_component_id()` Python package grouping** — always groups by first 2
+   directory levels, so `src/diagram_update/analyzer/` merges into `src.diagram_update`.
+   Cross-sub-package imports become self-loops and are dropped → diagram loses structure.
 
-### Tasks Created
-- review:step-01:primary (task-1773910550-d51d) — primary pass ✓ done
-- review:step-02:cross-pass-gap (task-1773911066-fe9a) — deep analysis
+3. **`merge_diagrams()` new node insertion** — always inserts before first edge,
+   causing large diffs on every add. Should insert at sorted position.
+
+4. **`parse_d2()` single-line block depth bug** — `node { shape: cylinder }` causes
+   node_span to extend to next closing brace, swallowing subsequent nodes.
+
+### Plan
+Primary pass done. Deep-dive into issues 1 & 2 (analyzer) next.
+
+## Iteration 2 — Deep Analyzer Pass
+
+### Focus: _matches_any + _compute_component_id
+
+**Bug 1 revised:** `_matches_any` has a FALSE POSITIVE (not false negative) for `**`-prefix patterns.
+`dir_pattern=''` branch returns True for ALL files when exclude patterns start with `**`.
+Default config NOT affected (uses `vendor/**`, not `**/vendor/**`). User configs with gitignore-style
+`**/...` exclude patterns will get empty diagrams.
+
+**Bug 2 confirmed:** `_compute_component_id` uses hardcoded `parts[:2]` for Python package grouping.
+Sub-packages collapse into parents → self-loops dropped → missing nodes + edges in diagram.
+Fix: use `".".join(parts[:-1])` — same as Java path. This is a correctness regression that
+affects any project with Python sub-packages (including this project itself).
+
+### Findings documented in .eval-sandbox/review/findings.md
