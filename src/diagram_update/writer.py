@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from diagram_update.merger import check_removal_threshold, merge_diagrams
@@ -85,6 +86,8 @@ def render_png(d2_path: Path) -> Path | None:
         return None
 
     png_path = d2_path.with_suffix(".png")
+    logger.info("Rendering PNG for %s ...", d2_path.name)
+    t0 = time.monotonic()
     try:
         subprocess.run(
             ["d2", str(d2_path), str(png_path)],
@@ -96,7 +99,7 @@ def render_png(d2_path: Path) -> Path | None:
         logger.warning("d2 render failed for %s: %s", d2_path, exc.stderr.strip())
         return None
 
-    logger.info("Rendered PNG to %s", png_path)
+    logger.info("Rendered PNG to %s (%.1fs)", png_path, time.monotonic() - t0)
     return png_path
 
 

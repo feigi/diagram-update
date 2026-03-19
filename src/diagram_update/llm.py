@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 from diagram_update.models import LLMError, ToolError
 
@@ -44,6 +45,7 @@ def generate_diagram(
     logger.info("Pass 1: identifying %s components...", diagram_type)
     pass1_prompt = _build_pass1_prompt(skeleton, diagram_type, entry_points, existing_d2)
     logger.debug("Pass 1 prompt length: %d chars", len(pass1_prompt))
+    t0 = time.monotonic()
     components_text = _call_copilot(pass1_prompt, model, timeout=timeout)
     components_text = _parse_response(components_text)
 
@@ -52,10 +54,11 @@ def generate_diagram(
 
     # Validate pass 1 structure and extract component IDs
     pass1_ids = _extract_pass1_ids(components_text)
+    elapsed = time.monotonic() - t0
     if pass1_ids:
-        logger.info("Pass 1 complete: %d components identified", len(pass1_ids))
+        logger.info("Pass 1 complete in %.1fs: %d components identified", elapsed, len(pass1_ids))
     else:
-        logger.warning("Pass 1 returned text but no parseable component IDs")
+        logger.warning("Pass 1 returned text but no parseable component IDs (%.1fs)", elapsed)
 
     # Pass 2: Convert to D2 code
     logger.info("Pass 2: generating D2 code for %s...", diagram_type)
@@ -63,7 +66,9 @@ def generate_diagram(
         components_text, diagram_type, existing_d2,
     )
     logger.debug("Pass 2 prompt length: %d chars", len(pass2_prompt))
+    t1 = time.monotonic()
     raw = _call_copilot(pass2_prompt, model, timeout=timeout)
+    logger.info("Pass 2 complete in %.1fs", time.monotonic() - t1)
     d2 = _parse_response(raw)
 
     if not d2.strip():

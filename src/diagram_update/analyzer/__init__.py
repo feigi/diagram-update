@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 import os
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -42,19 +43,23 @@ def analyze(config: DiagramConfig, project_root: Path) -> DependencyGraph:
     5. Group files into components based on config.granularity
     6. Build and return the dependency graph
     """
+    t0 = time.monotonic()
     files = _walk_files(config, project_root)
-    logger.info("Found %d source files", len(files))
+    logger.info("Found %d source files in %.1fs", len(files), time.monotonic() - t0)
     languages = sorted({f.language for f in files.values()})
     logger.info("Detected languages: %s", ", ".join(languages) if languages else "none")
 
+    t1 = time.monotonic()
     _parse_imports(files, project_root)
-    _resolve_imports(files, project_root)
+    logger.info("Parsed imports in %.1fs", time.monotonic() - t1)
 
+    t2 = time.monotonic()
+    _resolve_imports(files, project_root)
     internal_count = sum(
         1 for f in files.values()
         for imp in f.imports if imp.is_internal
     )
-    logger.info("Resolved %d internal imports", internal_count)
+    logger.info("Resolved %d internal imports in %.1fs", internal_count, time.monotonic() - t2)
 
     components = _group_into_components(files, config.granularity, project_root)
     relationships = _build_relationships(files, components)
@@ -163,6 +168,7 @@ def _parse_imports(files: dict[str, FileInfo], project_root: Path) -> None:
     if total == 0:
         return
 
+    logger.info("Parsing imports for %d files ...", total)
     max_workers = min(8, os.cpu_count() or 4)
     completed = 0
 
@@ -175,7 +181,7 @@ def _parse_imports(files: dict[str, FileInfo], project_root: Path) -> None:
             rel_str_result, imports_list = future.result()
             files[rel_str_result].imports = imports_list
             completed += 1
-            if total >= 50 and completed > 0 and completed % 100 == 0:
+            if total >= 20 and completed % max(1, total // 5) == 0:
                 logger.info("Parsing imports: %d/%d files ...", completed, total)
 
 

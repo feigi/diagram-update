@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -270,6 +271,9 @@ def _extract_all_signatures(graph: DependencyGraph, project_root: Path) -> None:
     if not items:
         return
 
+    t0 = time.monotonic()
+    logger.info("Extracting signatures for %d files ...", len(items))
+
     cache = _load_sig_cache(project_root)
     cached_sigs = cache.get("signatures", {})
 
@@ -321,10 +325,11 @@ def _extract_all_signatures(graph: DependencyGraph, project_root: Path) -> None:
                 except OSError:
                     pass
                 completed += 1
-                if total_misses >= 50 and completed > 0 and completed % 100 == 0:
+                if total_misses >= 20 and completed % max(1, total_misses // 5) == 0:
                     logger.info("Extracting signatures: %d/%d files ...", completed, total_misses)
 
-    logger.info("Signature cache: %d hits, %d misses", hits, total_misses if total_misses > 0 else 0)
+    elapsed = time.monotonic() - t0
+    logger.info("Signature cache: %d hits, %d misses (%.1fs)", hits, total_misses, elapsed)
 
     cache["version"] = 1
     cache["signatures"] = cached_sigs
