@@ -38,6 +38,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Config error: {exc}", file=sys.stderr)
         return 1
 
+    # CLI flag overrides config
+    if args.token_budget is not None:
+        config.token_budget = args.token_budget
+
     logger.info("[1/4] Analyzing %s ...", project_root)
     graph = analyze(config, project_root)
     logger.info(
@@ -45,13 +49,17 @@ def main(argv: list[str] | None = None) -> int:
         len(graph.components), len(graph.relationships),
     )
 
-    logger.info("[2/4] Building codebase skeleton ...")
-    skeleton = generate_skeleton(graph, project_root)
-    logger.info("[2/4] Skeleton: %d chars", len(skeleton))
-
     errors = 0
     diagrams_dir = project_root / "docs" / "diagrams"
     for diagram_type in _DIAGRAM_TYPES:
+        logger.info("[2/4] Building %s skeleton ...", diagram_type)
+        skeleton = generate_skeleton(
+            graph, project_root,
+            token_budget=config.token_budget,
+            diagram_type=diagram_type,
+        )
+        logger.info("[2/4] Skeleton: %d chars", len(skeleton))
+
         logger.info("[3/4] Generating %s diagram ...", diagram_type)
 
         # Read existing diagram so the LLM can preserve node keys
@@ -101,6 +109,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "-v", "--verbose",
         action="store_true",
         help="Enable verbose logging",
+    )
+    parser.add_argument(
+        "--token-budget",
+        type=int,
+        default=None,
+        help="Token budget for codebase skeleton (default: from config or 30000)",
     )
     return parser.parse_args(argv)
 

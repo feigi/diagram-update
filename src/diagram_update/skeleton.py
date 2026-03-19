@@ -2,32 +2,45 @@
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from pathlib import Path
 
 from diagram_update.models import DependencyGraph
 from diagram_update.signatures import extract_signatures
 
-# Budget allocation: file tree ~20%, signatures ~50%, edges ~30%
-_TREE_BUDGET_RATIO = 0.20
-_SIGS_BUDGET_RATIO = 0.50
-_EDGES_BUDGET_RATIO = 0.30
+logger = logging.getLogger(__name__)
+
+# Chars per token approximation for code content
+_CHARS_PER_TOKEN = 4
+
+# Per-diagram-type budget allocations (tree, signatures, edges)
+_BUDGET_SPLITS: dict[str, tuple[float, float, float]] = {
+    "architecture": (0.20, 0.40, 0.40),
+    "dependencies": (0.15, 0.15, 0.70),
+    "sequence":     (0.20, 0.10, 0.70),
+}
+_DEFAULT_SPLIT = (0.20, 0.30, 0.50)
 
 
 def generate_skeleton(
     graph: DependencyGraph,
     project_root: Path,
-    token_budget: int = 5000,
+    token_budget: int = 30000,
+    diagram_type: str = "architecture",
 ) -> str:
     """Generate a token-efficient codebase skeleton string.
 
     Combines three sections:
-    1. Annotated file tree (~20% of budget)
-    2. Ranked signatures (~50% of budget)
-    3. Dependency edges (~30% of budget)
+    1. Annotated file tree
+    2. Ranked signatures
+    3. Dependency edges
 
-    Signatures are ranked by cross-file reference count (most-imported first).
-    Each section is truncated to fit its budget allocation.
+    Budget allocation varies by diagram_type. Unused budget from earlier
+    sections is redistributed to later sections.
+
+    For dependency diagrams, edges are never truncated — they get their full
+    content first, and the remaining budget is split between tree and signatures.
     """
     # Extract signatures for all files
     _extract_all_signatures(graph, project_root)
@@ -35,33 +48,196 @@ def generate_skeleton(
     # Compute reference counts for signature ranking
     ref_counts = _compute_reference_counts(graph)
 
-    # Convert budget to word limits (1 token ~ 0.75 words)
-    total_words = int(token_budget * 0.75)
-    tree_words = int(total_words * _TREE_BUDGET_RATIO)
-    sigs_words = int(total_words * _SIGS_BUDGET_RATIO)
-    edges_words = int(total_words * _EDGES_BUDGET_RATIO)
+    # Build all three raw sections (untruncated)
+    raw_tree = _build_file_tree(graph)
+    raw_sigs = _build_ranked_signatures(graph, ref_counts)
+    raw_edges = _build_dependency_edges(graph)
 
+    # Compute total char budget
+    total_chars = token_budget * _CHARS_PER_TOKEN
+
+    # Get the split for the diagram_type
+    tree_frac, sigs_frac, edges_frac = _BUDGET_SPLITS.get(diagram_type, _DEFAULT_SPLIT)
+
+    # Apply budget allocation and adaptive reallocation
+    if diagram_type == "dependencies":
+        # For dependency diagrams: edges get full content first (never truncated),
+        # then remaining budget is split between tree and signatures
+        final_edges = raw_edges
+        remaining = total_chars - len(raw_edges)
+        if remaining < 0:
+            remaining = 0
+
+        # Split remaining between tree and sigs proportionally
+        # Original split ratios for tree and sigs
+        tree_sigs_total = tree_frac + sigs_frac
+        if tree_sigs_total > 0:
+            tree_share = tree_frac / tree_sigs_total
+            sigs_share = sigs_frac / tree_sigs_total
+        else:
+            tree_share = 0.5
+            sigs_share = 0.5
+
+        tree_budget = int(remaining * tree_share)
+        sigs_budget = int(remaining * sigs_share)
+
+        # Build tree first, redistribute leftover to sigs
+        final_tree, tree_truncated = _truncate_to_chars(raw_tree, tree_budget)
+        tree_leftover = tree_budget - len(final_tree)
+        if tree_leftover > 0:
+            sigs_budget += tree_leftover
+
+        final_sigs, sigs_truncated = _truncate_to_chars(raw_sigs, sigs_budget)
+
+        edges_truncated = False
+
+        if tree_truncated:
+            logger.info(
+                "Skeleton %s section truncated: %d -> %d chars",
+                "tree", len(raw_tree), len(final_tree),
+            )
+        if sigs_truncated:
+            logger.info(
+                "Skeleton %s section truncated: %d -> %d chars",
+                "signatures", len(raw_sigs), len(final_sigs),
+            )
+
+    elif diagram_type in ("sequence",):
+        # sequence: tree first, then edges (more important), then signatures
+        tree_budget = int(total_chars * tree_frac)
+        edges_budget = int(total_chars * edges_frac)
+        sigs_budget = int(total_chars * sigs_frac)
+
+        # Build tree first
+        final_tree, tree_truncated = _truncate_to_chars(raw_tree, tree_budget)
+        tree_leftover = tree_budget - len(final_tree)
+
+        # Redistribute tree leftover to edges and sigs proportionally
+        if tree_leftover > 0:
+            edges_sigs_total = edges_frac + sigs_frac
+            if edges_sigs_total > 0:
+                edges_budget += int(tree_leftover * edges_frac / edges_sigs_total)
+                sigs_budget += int(tree_leftover * sigs_frac / edges_sigs_total)
+            else:
+                edges_budget += tree_leftover
+
+        # Build edges second (more important for sequence)
+        final_edges, edges_truncated = _truncate_to_chars(raw_edges, edges_budget)
+        edges_leftover = edges_budget - len(final_edges)
+
+        # Redistribute edges leftover to sigs
+        if edges_leftover > 0:
+            sigs_budget += edges_leftover
+
+        # Build signatures last
+        final_sigs, sigs_truncated = _truncate_to_chars(raw_sigs, sigs_budget)
+
+        if tree_truncated:
+            logger.info(
+                "Skeleton %s section truncated: %d -> %d chars",
+                "tree", len(raw_tree), len(final_tree),
+            )
+        if edges_truncated:
+            logger.info(
+                "Skeleton %s section truncated: %d -> %d chars",
+                "edges", len(raw_edges), len(final_edges),
+            )
+        if sigs_truncated:
+            logger.info(
+                "Skeleton %s section truncated: %d -> %d chars",
+                "signatures", len(raw_sigs), len(final_sigs),
+            )
+
+    else:
+        # architecture (default): tree first, then signatures, then edges
+        tree_budget = int(total_chars * tree_frac)
+        sigs_budget = int(total_chars * sigs_frac)
+        edges_budget = int(total_chars * edges_frac)
+
+        # Build tree first
+        final_tree, tree_truncated = _truncate_to_chars(raw_tree, tree_budget)
+        tree_leftover = tree_budget - len(final_tree)
+
+        # Redistribute tree leftover to sigs and edges proportionally
+        if tree_leftover > 0:
+            sigs_edges_total = sigs_frac + edges_frac
+            if sigs_edges_total > 0:
+                sigs_budget += int(tree_leftover * sigs_frac / sigs_edges_total)
+                edges_budget += int(tree_leftover * edges_frac / sigs_edges_total)
+            else:
+                sigs_budget += tree_leftover
+
+        # Build signatures second (more important for architecture)
+        final_sigs, sigs_truncated = _truncate_to_chars(raw_sigs, sigs_budget)
+        sigs_leftover = sigs_budget - len(final_sigs)
+
+        # Redistribute sigs leftover to edges
+        if sigs_leftover > 0:
+            edges_budget += sigs_leftover
+
+        # Build edges last
+        final_edges, edges_truncated = _truncate_to_chars(raw_edges, edges_budget)
+
+        if tree_truncated:
+            logger.info(
+                "Skeleton %s section truncated: %d -> %d chars",
+                "tree", len(raw_tree), len(final_tree),
+            )
+        if sigs_truncated:
+            logger.info(
+                "Skeleton %s section truncated: %d -> %d chars",
+                "signatures", len(raw_sigs), len(final_sigs),
+            )
+        if edges_truncated:
+            logger.info(
+                "Skeleton %s section truncated: %d -> %d chars",
+                "edges", len(raw_edges), len(final_edges),
+            )
+
+    # Assemble sections
     sections: list[str] = []
+    if final_tree:
+        sections.append("FILE TREE:\n" + final_tree)
+    if final_sigs:
+        sections.append("SIGNATURES:\n" + final_sigs)
+    if final_edges:
+        sections.append("DEPENDENCIES:\n" + final_edges)
 
-    # Section 1: Annotated file tree
-    tree = _build_file_tree(graph)
-    if tree:
-        tree = _truncate_to_words(tree, tree_words)
-        sections.append("FILE TREE:\n" + tree)
+    result = "\n\n".join(sections)
 
-    # Section 2: Ranked signatures
-    sigs = _build_ranked_signatures(graph, ref_counts)
-    if sigs:
-        sigs = _truncate_to_words(sigs, sigs_words)
-        sections.append("SIGNATURES:\n" + sigs)
+    # Log summary stats
+    num_files = len(graph.files)
+    num_edges = len(graph.relationships)
+    logger.info(
+        "Skeleton: %d files, %d edges, %d chars (budget: %d tokens / %d chars)",
+        num_files, num_edges, len(result), token_budget, total_chars,
+    )
 
-    # Section 3: Dependency edges
-    edges = _build_dependency_edges(graph)
-    if edges:
-        edges = _truncate_to_words(edges, edges_words)
-        sections.append("DEPENDENCIES:\n" + edges)
+    return result
 
-    return "\n\n".join(sections)
+
+def _truncate_to_chars(text: str, max_chars: int) -> tuple[str, bool]:
+    """Truncate text to fit within a character budget.
+
+    Truncates at line boundaries to avoid cutting mid-line.
+    Returns a tuple of (truncated_text, was_truncated).
+    """
+    if len(text) <= max_chars:
+        return text, False
+
+    # Truncate at line boundaries
+    lines = text.split("\n")
+    result_lines: list[str] = []
+    char_count = 0
+    for line in lines:
+        # Account for newline character between lines
+        line_chars = len(line) + (1 if result_lines else 0)
+        if char_count + line_chars > max_chars and result_lines:
+            break
+        result_lines.append(line)
+        char_count += line_chars
+
+    return "\n".join(result_lines), True
 
 
 def _extract_all_signatures(graph: DependencyGraph, project_root: Path) -> None:
@@ -81,7 +257,14 @@ def _compute_reference_counts(graph: DependencyGraph) -> Counter[str]:
     for file_info in graph.files.values():
         for imp in file_info.imports:
             if imp.is_internal and imp.resolved_path is not None:
-                counts[str(imp.resolved_path)] += 1
+                path_str = str(imp.resolved_path)
+                # Handle absolute paths by making them relative to any source root
+                for root in graph.source_roots:
+                    root_str = str(root)
+                    if path_str.startswith(root_str):
+                        path_str = path_str[len(root_str):].lstrip("/")
+                        break
+                counts[path_str] += 1
     return counts
 
 
@@ -154,29 +337,6 @@ def _build_dependency_edges(graph: DependencyGraph) -> str:
         lines.append(f"{source_label} -> {target_label}{weight_note}")
 
     return "\n".join(lines)
-
-
-def _truncate_to_words(text: str, max_words: int) -> str:
-    """Truncate text to fit within a word budget.
-
-    Truncates at line boundaries to avoid cutting mid-line.
-    """
-    words = text.split()
-    if len(words) <= max_words:
-        return text
-
-    # Truncate at line boundaries
-    lines = text.split("\n")
-    result_lines: list[str] = []
-    word_count = 0
-    for line in lines:
-        line_words = len(line.split())
-        if word_count + line_words > max_words and result_lines:
-            break
-        result_lines.append(line)
-        word_count += line_words
-
-    return "\n".join(result_lines)
 
 
 def _id_to_label(component_id: str) -> str:

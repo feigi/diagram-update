@@ -15,7 +15,7 @@ CONFIG_FILENAME = ".diagram-update.yml"
 
 VALID_GRANULARITIES = {"directory", "package", "module"}
 
-_KNOWN_KEYS = {"include", "exclude", "granularity", "entry_points", "model"}
+_KNOWN_KEYS = {"include", "exclude", "granularity", "entry_points", "model", "token_budget"}
 
 
 def load_config(project_root: Path) -> DiagramConfig:
@@ -86,6 +86,15 @@ def _build_config(data: dict, config_path: Path) -> DiagramConfig:
                 f"Invalid model {val!r} in {config_path}; must be a string"
             )
         kwargs["model"] = val
+
+    if "token_budget" in data:
+        val = data["token_budget"]
+        if not isinstance(val, int) or val < 1000:
+            raise ConfigError(
+                f"Invalid token_budget {val!r} in {config_path}; "
+                f"must be an integer >= 1000"
+            )
+        kwargs["token_budget"] = val
 
     return DiagramConfig(**kwargs)
 

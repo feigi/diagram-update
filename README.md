@@ -38,7 +38,7 @@ pip install diagram-update
 Then run:
 
 ```sh
-diagram-update [project_dir] [-v]
+diagram-update [project_dir] [-v] [--token-budget N]
 ```
 
 ## What it does
@@ -66,15 +66,17 @@ Files are grouped into **components** based on the configured granularity (`modu
 
 ### 2. Skeleton generation
 
-The dependency graph is condensed into a token-efficient text skeleton that fits within a configurable budget (default 5 000 tokens). The budget is split across three sections:
+A separate skeleton is built **per diagram type**, each tailored to what that diagram needs most. The dependency graph is condensed into a text skeleton that fits within a configurable token budget (default 30 000 tokens, using ~4 chars/token). The budget is split across three sections with **diagram-type-aware ratios**:
 
-| Section | Budget | Content |
-|---|---|---|
-| **File tree** | ~20% | Directory structure with line counts |
-| **Signatures** | ~50% | Function/class signatures ranked by cross-file reference count (most-imported first) |
-| **Dependencies** | ~30% | Component edges sorted by weight, e.g. `src/api -> src/db (x5)` |
+| Section | Architecture | Dependencies | Sequence | Content |
+|---|---|---|---|---|
+| **File tree** | 20% | 15% | 20% | Directory structure with line counts |
+| **Signatures** | 40% | 15% | 10% | Function/class signatures ranked by cross-file reference count |
+| **Dependencies** | 40% | 70% | 70% | Component edges sorted by weight, e.g. `src/api -> src/db (x5)` |
 
-Each section is independently truncated to its word limit so the overall skeleton stays compact regardless of project size.
+Dependency and sequence diagrams heavily prioritize edges (70%) since those are the core of what they visualize. For dependency diagrams, edges are **never truncated** -- they get their full content first, with the remainder split between tree and signatures.
+
+Budget is allocated adaptively: if a section uses less than its allocation, the unused chars are redistributed to the remaining sections. Truncation is logged at INFO level when `--verbose` is set.
 
 ### 3. Two-pass LLM generation
 
@@ -90,6 +92,7 @@ If pass 2 returns empty output, an automatic retry with an error-correction prom
 Generated D2 goes through two cleanup steps before being written:
 
 - **Edge collapsing**: When the LLM produces multiple edges between the same pair of nodes (e.g. `api -> db: reads` and `api -> db: writes`), they are collapsed into a single edge with a merged label (`api -> db: reads, writes`). For four or more edges sharing a common label prefix, the label is summarized (e.g. `imports (4x)`).
+- **Orphan removal**: Nodes with no connecting edges are removed from the diagram.
 - **Validation**: The D2 is parsed to verify it contains at least one node and one edge.
 
 ### 5. Merge and write
@@ -126,6 +129,9 @@ entry_points:
 
 # LLM model to use
 model: claude-sonnet-4.6
+
+# Token budget for codebase skeleton (default: 30000)
+token_budget: 30000
 ```
 
 All fields are optional -- without a config file, sensible defaults are used:
@@ -137,6 +143,7 @@ All fields are optional -- without a config file, sensible defaults are used:
 | `granularity` | `"package"` | Component grouping: `directory`, `package`, or `module` |
 | `entry_points` | `[]` | Entry points for sequence diagram tracing |
 | `model` | `"claude-sonnet-4.6"` | Copilot CLI model to use |
+| `token_budget` | `30000` | Token budget for codebase skeleton (also settable via `--token-budget`) |
 
 ## Development
 

@@ -23,6 +23,7 @@ class DiagramConfig:
     granularity: str = "package"
     entry_points: list[str] = field(default_factory=list)
     model: str = "claude-sonnet-4.6"
+    token_budget: int = 30000
 
 
 @dataclass
