@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 from diagram_update.models import LLMError, ToolError
@@ -21,6 +22,109 @@ _FENCE_RE = re.compile(
 
 # Pattern to extract component IDs from pass 1 structured output
 _COMPONENT_ID_RE = re.compile(r"^\s*-\s*id:\s*(\S+)", re.MULTILINE)
+
+
+# ---------------------------------------------------------------------------
+# Shared Rich Live display for concurrent copilot calls
+# ---------------------------------------------------------------------------
+
+class _LiveManager:
+    """Thread-safe singleton managing a single Rich ``Live`` display.
+
+    Multiple copilot calls running in parallel register named *slots*.
+    The manager renders all active slots as side-by-side ``Panel`` columns
+    inside one shared ``Live`` context, avoiding the terminal corruption
+    that occurs when multiple ``Live`` instances compete.
+    """
+
+    _instance: _LiveManager | None = None
+    _creation_lock = threading.Lock()
+
+    def __new__(cls) -> _LiveManager:
+        with cls._creation_lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
+
+    def __init__(self) -> None:
+        if self._initialized:
+            return
+        self._lock = threading.Lock()
+        # slot_name → list of last N tail lines
+        self._slots: dict[str, list[str]] = {}
+        self._live: Live | None = None  # type: ignore[name-defined]
+        self._initialized = True
+
+    # -- public API ----------------------------------------------------------
+
+    def register(self, name: str) -> None:
+        """Add a slot and start the Live display if not already running."""
+        from rich.live import Live
+
+        with self._lock:
+            self._slots[name] = []
+            if self._live is None:
+                self._live = Live(
+                    self._render(),
+                    transient=True,
+                    refresh_per_second=8,
+                )
+                self._live.start()
+            else:
+                self._live.update(self._render())
+
+    def update(self, name: str, lines: list[str]) -> None:
+        """Replace the tail lines for *name* and refresh the display."""
+        with self._lock:
+            if name in self._slots:
+                self._slots[name] = lines[-20:]
+            if self._live is not None:
+                self._live.update(self._render())
+
+    def unregister(self, name: str) -> None:
+        """Remove a slot.  Stops the Live display when no slots remain."""
+        with self._lock:
+            self._slots.pop(name, None)
+            if self._live is not None:
+                if self._slots:
+                    self._live.update(self._render())
+                else:
+                    self._live.stop()
+                    self._live = None
+                    # Reset cursor-keys mode (DECCKM) in case Rich left it on
+                    sys.stdout.write("\x1b[?1l")
+                    sys.stdout.flush()
+
+    # -- internal ------------------------------------------------------------
+
+    def _render(self):  # noqa: ANN202 – Rich types
+        from rich.columns import Columns
+        from rich.panel import Panel
+        from rich.text import Text
+
+        panels = []
+        for name, lines in self._slots.items():
+            body = "".join(lines).strip() or "waiting …"
+            panels.append(
+                Panel(
+                    Text(body, overflow="ellipsis", no_wrap=False),
+                    title=f"[bold cyan]{name}[/]",
+                    expand=True,
+                ),
+            )
+        return Columns(panels, equal=True, expand=True)
+
+
+# Module-level singleton, lazily constructed on first use.
+_live_mgr: _LiveManager | None = None
+
+
+def _get_live_manager() -> _LiveManager:
+    global _live_mgr
+    if _live_mgr is None:
+        _live_mgr = _LiveManager()
+    return _live_mgr
 
 
 def generate_diagram(
@@ -46,7 +150,8 @@ def generate_diagram(
     pass1_prompt = _build_pass1_prompt(skeleton, diagram_type, entry_points, existing_d2)
     logger.debug("Pass 1 prompt length: %d chars", len(pass1_prompt))
     t0 = time.monotonic()
-    components_text = _call_copilot(pass1_prompt, model, timeout=timeout)
+    components_text = _call_copilot(pass1_prompt, model, timeout=timeout,
+                                    label=f"{diagram_type} · Pass 1")
     components_text = _parse_response(components_text)
 
     if not components_text.strip():
@@ -67,7 +172,8 @@ def generate_diagram(
     )
     logger.debug("Pass 2 prompt length: %d chars", len(pass2_prompt))
     t1 = time.monotonic()
-    raw = _call_copilot(pass2_prompt, model, timeout=timeout)
+    raw = _call_copilot(pass2_prompt, model, timeout=timeout,
+                        label=f"{diagram_type} · Pass 2")
     logger.info("Pass 2 complete in %.1fs", time.monotonic() - t1)
     d2 = _parse_response(raw)
 
@@ -286,7 +392,8 @@ def _retry_generation(
         )
     prompt += "\nOutput ONLY valid D2 code. No markdown fences, no explanations."
 
-    raw = _call_copilot(prompt, model, timeout=timeout)
+    raw = _call_copilot(prompt, model, timeout=timeout,
+                        label=f"{diagram_type} · Retry")
     return _parse_response(raw)
 
 
@@ -434,15 +541,16 @@ def _extract_skeleton_edges(skeleton: str) -> list[tuple[str, str]]:
     return edges
 
 
-def _call_copilot(prompt: str, model: str, timeout: int = 300) -> str:
+def _call_copilot(
+    prompt: str, model: str, timeout: int = 300, label: str = "Copilot",
+) -> str:
     """Invoke GitHub Copilot CLI in non-interactive mode and return output.
 
-    When stdout is a TTY the output is streamed into a transient Rich panel
-    (visible while running, cleared on completion). Otherwise output is
-    captured silently, e.g. when piped or in automated environments.
+    When stdout is a TTY the output is streamed into a shared Rich display
+    (side-by-side panels when multiple calls run concurrently).
+    Otherwise output is captured silently, e.g. when piped or in automated
+    environments.
     """
-    import sys
-
     cmd = [
         "copilot",
         "-p", prompt,
@@ -453,7 +561,7 @@ def _call_copilot(prompt: str, model: str, timeout: int = 300) -> str:
     ]
 
     if sys.stdout.isatty():
-        return _stream_copilot_live(cmd, timeout)
+        return _stream_copilot_live(cmd, timeout, label)
 
     try:
         result = subprocess.run(
@@ -478,19 +586,14 @@ def _call_copilot(prompt: str, model: str, timeout: int = 300) -> str:
     return result.stdout
 
 
-def _stream_copilot_live(cmd: list[str], timeout: int) -> str:
-    """Stream copilot stdout into a transient Rich panel, return captured text.
+def _stream_copilot_live(cmd: list[str], timeout: int, label: str) -> str:
+    """Stream copilot stdout into the shared ``_LiveManager`` display.
 
-    The panel is erased from the terminal once the subprocess exits, keeping
-    the scroll-back clean while still letting the user see progress.
+    Each concurrent call gets its own panel (side-by-side).  The shared
+    ``Live`` display is started on the first registration and stopped when the
+    last panel is removed, keeping the scroll-back clean.
     """
-    import threading
-    import time
-
-    from rich.live import Live
-    from rich.panel import Panel
-    from rich.text import Text
-
+    mgr = _get_live_manager()
     collected: list[str] = []
     stderr_lines: list[str] = []
 
@@ -516,23 +619,19 @@ def _stream_copilot_live(cmd: list[str], timeout: int) -> str:
     deadline = time.monotonic() + timeout
     timed_out = False
 
+    mgr.register(label)
     try:
-        with Live(Panel("", title="[bold cyan]Copilot[/]"), transient=True, refresh_per_second=10) as live:
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                collected.append(line)
-                tail = "".join(collected[-20:]).strip()
-                live.update(Panel(Text(tail), title="[bold cyan]Copilot[/]"))
-                if time.monotonic() > deadline:
-                    proc.kill()
-                    timed_out = True
-                    break
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            collected.append(line)
+            mgr.update(label, collected[-20:])
+            if time.monotonic() > deadline:
+                proc.kill()
+                timed_out = True
+                break
     finally:
         proc.stdout.close()
-        # Rich's Live display can leave the terminal in application cursor-keys
-        # mode (DECCKM). Reset it so arrow keys work normally afterwards.
-        sys.stdout.write("\x1b[?1l")
-        sys.stdout.flush()
+        mgr.unregister(label)
 
     if timed_out:
         raise LLMError(f"copilot timed out after {timeout}s")
