@@ -69,7 +69,7 @@ def generate_diagram(
     d2 = collapse_edges(d2)
     d2 = remove_orphan_nodes(d2)
 
-    _validate_d2(d2)
+    _validate_d2(d2, skeleton=skeleton)
     return d2
 
 
@@ -126,9 +126,13 @@ def _build_pass1_prompt(
             )
 
     parts.extend([
-        "\n\nOutput a structured list:",
+        "\n\nIMPORTANT: Use the exact file/package paths from the skeleton as component IDs. "
+        "For example, if the skeleton shows 'src/auth/handler.py', use 'auth.handler' as the id. "
+        "Do NOT invent new names — derive IDs directly from the skeleton paths.",
+        "",
+        "Output a structured list:",
         "COMPONENTS:",
-        "- id: <key>, label: <human name>, type: <service|module|database|queue|external>",
+        "- id: <key derived from skeleton path>, label: <human name>, type: <service|module|database|queue|external>",
         "- ...",
         "",
         "RELATIONSHIPS:",
@@ -226,9 +230,13 @@ def _build_pass2_prompt(
             f"\nExisting diagram:\n{existing_d2}",
         ])
 
-    parts.append(
-        "\n\nOutput ONLY valid D2 code. No markdown fences, no explanations."
-    )
+    parts.extend([
+        "",
+        "IMPORTANT: Use the exact component IDs from the list above as D2 node keys. "
+        "Do NOT rename, abbreviate, or rephrase them. Consistency of keys across runs is critical.",
+        "",
+        "Output ONLY valid D2 code. No markdown fences, no explanations.",
+    ])
 
     return "\n".join(parts)
 
@@ -259,10 +267,11 @@ def _retry_generation(
     return _parse_response(raw)
 
 
-def _validate_d2(d2: str) -> None:
-    """Validate that generated D2 has at least one node and one edge.
+def _validate_d2(d2: str, skeleton: str | None = None) -> None:
+    """Validate generated D2 has nodes/edges and covers skeleton relationships.
 
     Raises LLMError if the D2 content is structurally invalid.
+    Logs warnings for missing skeleton coverage (does not reject).
     """
     from diagram_update.merger import parse_d2
 
@@ -273,11 +282,57 @@ def _validate_d2(d2: str) -> None:
         logger.warning(
             "Generated D2 has %d node(s) but no edges", len(parsed.node_keys)
         )
+
+    # Check skeleton relationship coverage if skeleton provided
+    if skeleton:
+        skeleton_edges = _extract_skeleton_edges(skeleton)
+        if skeleton_edges:
+            d2_node_lower = {k.lower() for k in parsed.node_keys}
+            covered = 0
+            for source, target in skeleton_edges:
+                # Check if both source and target appear as substrings in any D2 node key
+                src_found = any(source in k for k in d2_node_lower)
+                tgt_found = any(target in k for k in d2_node_lower)
+                if src_found and tgt_found:
+                    covered += 1
+            coverage = covered / len(skeleton_edges) if skeleton_edges else 1.0
+            logger.info(
+                "Skeleton coverage: %d/%d edges (%.0f%%)",
+                covered, len(skeleton_edges), coverage * 100,
+            )
+            if coverage < 0.3:
+                logger.warning(
+                    "Low skeleton coverage (%.0f%%): LLM output may not reflect codebase structure",
+                    coverage * 100,
+                )
+
     logger.debug(
         "D2 validation passed: %d nodes, %d edges",
         len(parsed.node_keys),
         len(parsed.edge_tuples),
     )
+
+
+def _extract_skeleton_edges(skeleton: str) -> list[tuple[str, str]]:
+    """Extract (source, target) pairs from DEPENDENCIES section of skeleton."""
+    edges: list[tuple[str, str]] = []
+    in_deps = False
+    for line in skeleton.splitlines():
+        if line.strip() == "DEPENDENCIES:":
+            in_deps = True
+            continue
+        if in_deps:
+            if line.strip() and not line.startswith(" ") and ":" in line and "->" not in line:
+                # Hit a new section header
+                break
+            if "->" in line:
+                parts = line.split("->", 1)
+                if len(parts) == 2:
+                    src = parts[0].strip().split("/")[-1].lower()
+                    tgt = parts[1].strip().split("(")[0].strip().split("/")[-1].lower()
+                    if src and tgt:
+                        edges.append((src, tgt))
+    return edges
 
 
 def _call_copilot(prompt: str, model: str) -> str:

@@ -50,8 +50,17 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     errors = 0
+    attempted = 0
     diagrams_dir = project_root / "docs" / "diagrams"
     for diagram_type in _DIAGRAM_TYPES:
+        # Skip sequence diagrams when no entry points are configured —
+        # without explicit entry points, the LLM infers them non-deterministically
+        if diagram_type == "sequence" and not config.entry_points:
+            logger.info("Skipping sequence diagram: no entry_points configured")
+            continue
+
+        attempted += 1
+
         logger.info("[2/4] Building %s skeleton ...", diagram_type)
         skeleton = generate_skeleton(
             graph, project_root,
@@ -87,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     elapsed = time.monotonic() - t0
     print(f"Done in {elapsed:.1f}s")
 
-    if errors == len(_DIAGRAM_TYPES):
+    if attempted > 0 and errors == attempted:
         return 1
 
     return 0

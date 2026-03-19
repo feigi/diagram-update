@@ -222,13 +222,18 @@ flows: Flows {
 }"""
 
 
-def _mock_llm_side_effects():
-    """Return side_effect list for 3 diagram types (2 calls each)."""
-    return [
+def _mock_llm_side_effects(include_sequence: bool = False):
+    """Return side_effect list for diagram types (2 calls each).
+
+    By default, sequence is skipped (no entry_points configured).
+    """
+    effects = [
         _COMPONENTS_RESPONSE, _ARCH_D2,   # architecture
         _COMPONENTS_RESPONSE, _DEPS_D2,   # dependencies
-        _COMPONENTS_RESPONSE, _SEQ_D2,    # sequence
     ]
+    if include_sequence:
+        effects.extend([_COMPONENTS_RESPONSE, _SEQ_D2])  # sequence
+    return effects
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +365,7 @@ class TestFullPipelinePython:
         diagrams = tmp_path / "docs" / "diagrams"
         assert (diagrams / "architecture.d2").exists()
         assert (diagrams / "dependencies.d2").exists()
-        assert (diagrams / "sequence.d2").exists()
+        # sequence.d2 not generated without entry_points
 
     def test_architecture_d2_has_nodes_and_edges(self, tmp_path: Path) -> None:
         _build_python_project(tmp_path)
@@ -377,13 +382,16 @@ class TestFullPipelinePython:
         assert "app" in content.lower()
         assert "->" in content
 
-    def test_sequence_d2_has_sequence_shape(self, tmp_path: Path) -> None:
+    def test_sequence_d2_generated_with_entry_points(self, tmp_path: Path) -> None:
+        """Sequence diagrams are generated when entry_points are configured."""
         _build_python_project(tmp_path)
+        cfg = tmp_path / ".diagram-update.yml"
+        cfg.write_text("entry_points:\n  - myapp.app.create_app\n")
 
         with patch("diagram_update.llm._check_copilot_available"):
             with patch(
                 "diagram_update.llm._call_copilot",
-                side_effect=_mock_llm_side_effects(),
+                side_effect=_mock_llm_side_effects(include_sequence=True),
             ):
                 main([str(tmp_path)])
 
@@ -565,22 +573,21 @@ class TestErrorPathIntegration:
         _build_python_project(tmp_path)
 
         # Empty pass1 raises LLMError immediately (1 call consumed for deps)
+        # sequence is skipped (no entry_points)
         with patch("diagram_update.llm._check_copilot_available"):
             with patch(
                 "diagram_update.llm._call_copilot",
                 side_effect=[
                     _COMPONENTS_RESPONSE, _ARCH_D2,  # arch ok
                     "",                                # deps pass1 fails (empty)
-                    _COMPONENTS_RESPONSE, _SEQ_D2,    # seq ok
                 ],
             ):
                 result = main([str(tmp_path)])
 
-        # Partial success
+        # Partial success (1 of 2 attempted succeeded)
         assert result == 0
         diagrams = tmp_path / "docs" / "diagrams"
         assert (diagrams / "architecture.d2").exists()
-        assert (diagrams / "sequence.d2").exists()
 
     def test_verbose_logs_pipeline_info(self, tmp_path: Path, caplog) -> None:
         """Verbose mode triggers debug/info logging through the pipeline."""

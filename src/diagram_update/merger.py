@@ -7,10 +7,11 @@ from dataclasses import dataclass, field
 
 # Regex patterns for parsing D2 content
 # Node: identifier optionally followed by label/style/block
-_NODE_RE = re.compile(r"^(\w[\w.]*)(?:\s*:\s*(.+?))?(?:\s*\{)?\s*$")
+# Supports hyphens in keys (e.g., my-service, auth-api.handler)
+_NODE_RE = re.compile(r"^([\w][\w.\-]*)(?:\s*:\s*(.+?))?(?:\s*\{)?\s*$")
 # Edge: source -> target with optional label
 _EDGE_RE = re.compile(
-    r"^([\w.]+)\s*(->|<->|<-|--)\s*([\w.]+)(?:\s*:\s*(.+))?\s*$"
+    r"^([\w][\w.\-]*)\s*(->|<->|<-|--)\s*([\w][\w.\-]*)(?:\s*:\s*(.+))?\s*$"
 )
 # Closing brace
 _CLOSE_BRACE_RE = re.compile(r"^\s*\}\s*$")
@@ -337,8 +338,24 @@ def remove_orphan_nodes(d2: str) -> str:
         referenced.add(source)
         referenced.add(target)
 
-    # A node is connected if its key matches directly or is a prefix
-    # of a referenced dotted path (container whose children have edges)
+    # Collect all node keys that have edges within container blocks.
+    # A container block is connected if any edge inside it references
+    # nodes that are also inside it (non-dotted child references).
+    container_edge_nodes: set[str] = set()
+    for node_key in parsed.node_keys:
+        if node_key in parsed.node_spans:
+            start, end = parsed.node_spans[node_key]
+            if end > start:
+                # Multi-line block — check if any edges are inside it
+                for edge_key, edge_line in parsed.edge_line_indices.items():
+                    if start < edge_line < end:
+                        container_edge_nodes.add(node_key)
+                        break
+
+    # A node is connected if:
+    # 1. Its key matches directly in an edge, or
+    # 2. It's a prefix of a referenced dotted path (container whose children have edges), or
+    # 3. It's a container block that contains edges between its children
     orphans: set[str] = set()
     for node_key in parsed.node_keys:
         is_connected = False
@@ -346,6 +363,9 @@ def remove_orphan_nodes(d2: str) -> str:
             if ref == node_key or ref.startswith(node_key + "."):
                 is_connected = True
                 break
+        # Protect container nodes that have internal edges
+        if not is_connected and node_key in container_edge_nodes:
+            is_connected = True
         if not is_connected:
             orphans.add(node_key)
 

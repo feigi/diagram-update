@@ -14,6 +14,7 @@ from diagram_update.llm import (
     _check_copilot_available,
     _retry_generation,
     _validate_d2,
+    _extract_skeleton_edges,
 )
 from diagram_update.models import LLMError, ToolError
 
@@ -332,3 +333,45 @@ class TestValidateD2:
     def test_full_diagram_passes(self):
         d2 = "api: API {\n  handler: Handler\n}\ndb: Database\napi -> db: queries"
         _validate_d2(d2)  # Should not raise
+
+    def test_skeleton_coverage_high(self):
+        """Good D2 output that covers skeleton relationships should pass cleanly."""
+        skeleton = "DEPENDENCIES:\napi -> db (x3)\nauth -> db"
+        d2 = "api: API\ndb: Database\nauth: Auth\napi -> db: queries\nauth -> db: validates"
+        _validate_d2(d2, skeleton=skeleton)  # Should not raise
+
+    def test_skeleton_coverage_low_warns(self, caplog):
+        """D2 output missing most skeleton relationships should log a warning."""
+        import logging
+        skeleton = "DEPENDENCIES:\napi -> db\nauth -> cache\nworker -> queue\nscheduler -> worker"
+        d2 = "foo: Foo\nbar: Bar\nfoo -> bar: something"
+        with caplog.at_level(logging.WARNING):
+            _validate_d2(d2, skeleton=skeleton)
+        assert "Low skeleton coverage" in caplog.text
+
+    def test_skeleton_coverage_none_skipped(self):
+        """No skeleton means no coverage check."""
+        _validate_d2("api: API\napi -> db")  # Should not raise
+
+
+class TestExtractSkeletonEdges:
+    """Tests for skeleton DEPENDENCIES parsing."""
+
+    def test_extracts_basic_edges(self):
+        skeleton = "FILE TREE:\napp.py\n\nDEPENDENCIES:\napi -> db\nauth -> cache"
+        edges = _extract_skeleton_edges(skeleton)
+        assert ("api", "db") in edges
+        assert ("auth", "cache") in edges
+
+    def test_handles_weight_annotations(self):
+        skeleton = "DEPENDENCIES:\nsrc/api -> src/db (x3)"
+        edges = _extract_skeleton_edges(skeleton)
+        assert ("api", "db") in edges
+
+    def test_empty_skeleton_returns_empty(self):
+        assert _extract_skeleton_edges("FILE TREE:\napp.py") == []
+
+    def test_extracts_leaf_names(self):
+        skeleton = "DEPENDENCIES:\nsrc/auth/handler -> src/db/models"
+        edges = _extract_skeleton_edges(skeleton)
+        assert ("handler", "models") in edges

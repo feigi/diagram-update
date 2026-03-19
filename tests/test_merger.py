@@ -79,6 +79,23 @@ class TestParseD2:
         assert "api" in parsed.node_keys
         assert parsed.node_spans["api"] == (0, 4)
 
+    def test_hyphenated_node_names(self) -> None:
+        content = "auth-service: Auth Service\nmy-db: Database"
+        parsed = parse_d2(content)
+        assert "auth-service" in parsed.node_keys
+        assert "my-db" in parsed.node_keys
+
+    def test_hyphenated_edge_names(self) -> None:
+        content = "auth-service -> my-db: queries"
+        parsed = parse_d2(content)
+        assert ("auth-service", "->", "my-db") in parsed.edge_tuples
+        assert parsed.edge_labels[("auth-service", "->", "my-db")] == "queries"
+
+    def test_hyphenated_dotted_node(self) -> None:
+        content = "my-app.auth-handler"
+        parsed = parse_d2(content)
+        assert "my-app.auth-handler" in parsed.node_keys
+
 
 # --- merge_diagrams tests ---
 
@@ -366,3 +383,15 @@ class TestRemoveOrphanNodes:
         result = remove_orphan_nodes(d2)
         assert "api" in result
         assert "db" in result
+
+    def test_keeps_container_with_dotted_child_edges(self) -> None:
+        """Container nodes whose dotted children appear in edges are protected."""
+        d2 = "backend: Backend\napi\ndb\nbackend.api -> backend.db"
+        result = remove_orphan_nodes(d2)
+        assert "backend" in result
+
+    def test_removes_single_line_orphan_not_container(self) -> None:
+        """Single-line nodes with no edges should still be removed."""
+        d2 = "api\ndb\norphan: Unused\napi -> db"
+        result = remove_orphan_nodes(d2)
+        assert "orphan" not in result
