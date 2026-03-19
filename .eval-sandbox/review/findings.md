@@ -1,155 +1,113 @@
-# Code Review: diagram-update
+# Code Review: diagram-update (correctness + drift-reduction)
 
 ## Files Reviewed
-- [x] src/diagram_update/analyzer/__init__.py
-- [x] src/diagram_update/merger.py
 - [x] src/diagram_update/llm.py
+- [x] src/diagram_update/merger.py
 - [x] src/diagram_update/skeleton.py
-- [x] src/diagram_update/signatures.py
 - [x] src/diagram_update/writer.py
 - [x] src/diagram_update/models.py
-- [x] src/diagram_update/config.py
 
 ## Summary
-**REQUEST_CHANGES** — Several concrete correctness bugs and drift-amplifying issues found.
-
----
+REQUEST_CHANGES — Two correctness bugs found; one high-risk drift issue
 
 ## Critical Issues (Must Fix)
 
-### 1. `_matches_any()` — broken `**` glob expansion (correctness)
-**File:** `src/diagram_update/analyzer/__init__.py`
+### 1. Merge silently breaks container-child node insertion (correctness + drift)
+`merger.py` `merge_diagrams()` — when a new child node is added to an existing 
+container, `new.node_spans` contains the child's line index within the *new* D2 
+(which has the container wrapper). But only the child's line(s) at that span are 
+inserted into the output, **at the top level** (before the first edge), not inside 
+the container block. This produces invalid/incorrect D2 for any diagram that uses 
+containers (which is the default for architecture diagrams).
 
-The function falls back to a manual `**` handler that only checks `path_str.startswith(dir_pattern + "/")` — it cannot match patterns like `**/test_*.py`, `vendor/**/*.java`, or `**/node_modules/**`. For example, the default exclude `"tests/**"` will only be matched if `path_str` starts with `"tests/"`, so a file at just `"tests"` (top-level) would never match. More importantly, patterns that start with `**` other than `"**/*"` are silently dropped, meaning exclude rules with `**/vendor/**` are ignored and those files pollute the graph.
+Example: old diagram has `api: API { handler }`. New run adds `router`. The merge 
+inserts `router: Router` as a top-level node instead of inside the `api { }` block.
 
-**Concrete impact on correctness:** Files that should be excluded get analyzed and appear in the diagram.
+Risk: **HIGH** — architecture diagrams always group nodes into containers.
 
-### 2. `_compute_component_id()` for Python `"package"` granularity — incorrect grouping (correctness)
-**File:** `src/diagram_update/analyzer/__init__.py`
-
-For Python files with `granularity="package"`, files are always grouped into "first two directory levels":
-- `src/diagram_update/merger.py` → `src.diagram_update`
-- `src/diagram_update/analyzer/python_parser.py` → `src.diagram_update` ← WRONG
-
-The sub-package `analyzer/` is grouped into the same component as its parent, making
-all cross-analyzer imports appear as self-loops (source == target) and get silently
-dropped. The diagram shows fewer nodes and relationships than actually exist.
-
-**Concrete impact on correctness:** Sub-packages are collapsed into parent packages,
-losing architectural structure.
-
-### 3. `merge_diagrams()` — new nodes inserted at wrong position (drift)
-**File:** `src/diagram_update/merger.py`
-
-New nodes are bulk-inserted at `first_edge_output_idx` (before the first existing edge)
-in `sorted(added_nodes)` order. This means adding a single new module appends a block
-before all existing edges in the file, creating a large diff even when the change is
-minimal. Existing nodes that are alphabetically after the new node are not shifted —
-the sorted-insertion guarantee only applies to the new nodes among themselves.
-
-**Concrete impact on drift:** Every new component addition shuffles edge-preceding
-content in the output file.
-
-### 4. `parse_d2()` — depth tracking fails on single-line blocks (correctness/drift)
-**File:** `src/diagram_update/merger.py`
-
-When a node is declared as a single-line block: `node: Label { shape: cylinder }`,
-`_NODE_RE` matches because it ends with `{`, but the block is never closed (depth
-never decrements) because the closing `}` is on the same line and the code only
-checks lines[i+1:]. This results in `node_spans[key]` running to the next top-level
-`}`, which may swallow subsequent nodes. Merge then removes those "inner" nodes when
-diffing, causing data loss.
-
----
+### 2. `_parse_response` fails silently when text follows closing fence (correctness)
+`llm.py` `_parse_response()` — when LLM output has prose after the closing ```,
+the `_FENCE_RE` regex doesn't match (requires `$` at end), and the fallback only
+removes the last line if it's *exactly* ```. Non-empty text after ``` means the
+fence line stays in the output, injecting ``` into the generated D2.
 
 ## Suggestions (Should Consider)
-
-- **`remove_orphan_nodes()`**: Sequence diagram containers have all edges inside
-  them; the top-level container node is never directly referenced in top-level edges.
-  The current heuristic (`container_edge_nodes`) only guards against this partially —
-  it checks `start < edge_line < end` but `parse_d2()` doesn't record edge line
-  indices for edges inside containers (they're consumed during brace-depth scan).
-  Sequence diagram containers may be incorrectly pruned.
-
-- **`_check_skeleton_coverage()`**: Coverage is computed using substring matching
-  (`source in k or source.split(".")[-1] in k`). A leaf name like `api` matching
-  `external-api` falsely boosts coverage and hides a real low-coverage problem.
-
-- **`_call_copilot()` timeout**: 120s is the only guard. No retry on transient failures.
+- `_check_skeleton_coverage` only logs a WARNING at <30% coverage; generation 
+  continues producing a likely-incorrect diagram. Consider rejecting and retrying.
+- `_build_pass1_update_prompt` instructs LLM to keep existing IDs but the 
+  instruction is in natural language — there's no mechanical enforcement. A 
+  structural comparison of old vs new component IDs after pass 1 could catch drift 
+  early and trigger a re-prompt.
+- Edge insertion order in merge: new edges are appended at the end, while new nodes 
+  are inserted before the first edge. For large diagrams this creates an inconsistent 
+  file structure that accumulates over multiple runs.
 
 ## Positive Notes
-- The two-pass LLM approach is smart: separates "what exists" from "how to render", enabling the update prompt to preserve IDs.
-- `check_removal_threshold()` is a good safety net against catastrophic LLM drift.
-- `collapse_edges()` is a solid post-processing step to reduce visual noise.
-- Adaptive budget reallocation in `skeleton.py` is well-designed.
+- Two-pass LLM approach (identify then render) cleanly separates concerns
+- Adaptive budget redistribution in `skeleton.py` is well-thought-out
+- The 80% removal threshold sidecar file safety net is a good guard
+- `collapse_edges` deduplication is correct and handles direction variants
 
 ---
 
-## Deep Analysis: Analyzer Correctness (glob + component grouping)
+## Deep Analysis: merge_diagrams() Container-Child Insertion Bug (Step 2)
 
-### Finding 1 (Revised): `_matches_any()` — false-positive for `**`-prefix patterns
+### Confirmed Bug: Container Block Content Is Always Preserved Verbatim
 
-**Actual behavior differs from primary review findings.**
+**Root cause:** `parse_d2()` records container blocks as ATOMIC units. The entire `api { ... }` span is tracked under key `api`, but the CONTENT of the block is opaque — inner lines (children) are never added to `node_keys`. `merge_diagrams()` only tracks adds/removals at the container-key level, never within the block body.
 
-The bug is a **false positive**, not a miss. When any pattern starts with `**` (e.g., `**/vendor/**`), the fallback branch computes `dir_pattern = ""` and immediately returns `True` — matching **every file**.
+**Consequence (confirmed with live tests):**
 
-Concrete evidence:
+| Scenario | Expected | Actual |
+|----------|----------|--------|
+| Add child to existing container block (`api { handler\n router }`) | `router` appears in merged output | **SILENTLY DROPPED** |
+| Remove child from existing container block | `router` removed from merged output | **OLD BLOCK PRESERVED, router stays** |
+| Update label inside existing container (`label: New Label`) | New label applied | **Old label preserved** |
+| New edge references container-internal child (`services.worker -> db`) | worker node also added | **Edge added, node MISSING from block — corrupt diagram** |
+
+### Code Path
+
 ```python
-_matches_any('src/foo.py', ['**/vendor/**'])  # returns True  ← BUG
-_matches_any('src/bar.py', ['**/node_modules/**'])  # returns True  ← BUG
+# merger.py merge_diagrams():
+added_nodes = new.node_keys - old.node_keys   # 'api' in both → not in added_nodes
+removed_nodes = old.node_keys - new.node_keys  # 'api' in both → not in removed_nodes
+
+# 'api' is neither added nor removed → old block lines copied verbatim
+# Inner block changes (new/removed children) are invisible
 ```
 
-**Impact on DEFAULT config:** Low. Default exclude patterns are `tests/**`, `vendor/**` etc. (no leading `**`), so defaults work correctly. `"**/*"` in the include list also accidentally returns `True` via this branch, which happens to be correct.
+### Adversarial Evidence
 
-**Impact on user-provided config:** High. Any gitignore-style pattern like `**/vendor/**`, `**/dist/**`, `**/generated/**` in a user's `.diagram-update.yml` exclude list causes ALL files to be excluded → empty diagram, no error message.
-
-**Root cause:** `dir_pattern = pattern.split("**")[0].rstrip("/")` yields `""` for leading-`**` patterns, then `if not dir_pattern: return True` treats them as match-everything.
-
-**Fix:** For patterns starting with `**/`, strip the prefix and recursively check the path against the suffix pattern at each path segment:
 ```python
-if pattern.startswith('**/'):
-    suffix = pattern[3:]
-    if fnmatch.fnmatch(path_str, suffix):
-        return True
-    parts = path_str.split('/')
-    for i in range(1, len(parts)):
-        if fnmatch.fnmatch('/'.join(parts[i:]), suffix):
-            return True
+old = 'api: API {\n  handler\n}\napi -> db'
+new = 'api: API {\n  handler\n  router\n}\napi -> db'
+result = merge_diagrams(old, new)
+assert 'router' in result  # FAILS — router silently dropped
+# result == 'api: API {\n  handler\n}\napi -> db'  (unchanged from old)
 ```
 
----
-
-### Finding 2 (Confirmed): `_compute_component_id()` — sub-packages collapse into parent
-
-**Confirmed by tracing the code path.** For Python files, the code uses `".".join(parts[:2])` (first two path components), hardcoded regardless of depth:
-
-```
-src/diagram_update/merger.py          → parts[:2] = ['src','diagram_update'] → src.diagram_update
-src/diagram_update/analyzer/parser.py → parts[:2] = ['src','diagram_update'] → src.diagram_update  ← WRONG
-```
-
-All files in `src/diagram_update/analyzer/` get component id `src.diagram_update`, identical to parent package files. Cross-package imports (e.g., `merger.py → analyzer`) appear as self-loops and are silently dropped by `_build_relationships()` (`if source_comp != target_comp`).
-
-**Verified: self-loops are silently discarded:**
 ```python
-# _build_relationships:
-if source_comp != target_comp:
-    edge_counts[(source_comp, target_comp)] += 1
+# Even worse: orphaned edge without its node
+old3 = 'services: Services {\n  api: API\n}\nservices.api -> db'
+new3 = 'services: Services {\n  api: API\n  worker: Worker\n}\nservices.api -> db\nservices.worker -> db'
+result3 = merge_diagrams(old3, new3)
+assert 'worker' in result3  # FAILS for the block; only edge is added
+# worker node is missing from container, but services.worker -> db edge IS added
+# → corrupt diagram: edge references non-existent node
 ```
-No warning is emitted.
 
-**Root cause:** Hard-coded `parts[:2]` instead of using the file's actual directory.
+### Scope of Impact
 
-**Fix:** Use `".".join(parts[:-1])` (all directory levels, excluding filename) — consistent with how Java packages already work in the same function.
+Architecture diagrams always use container blocks. Every merge of an updated diagram that adds or removes children from an existing container will silently corrupt the output. This is not an edge case — it is the primary use pattern.
 
-**This fix changes diagram output** — sub-packages that were previously collapsed will appear as distinct nodes. Existing diagrams will drift on next regeneration, but they will then accurately reflect the architecture.
+### Correct Fix (not implemented here)
 
----
+For each container key present in BOTH old and new:
+1. Compare `old.node_spans[key]` content vs `new.node_spans[key]` content
+2. If different, replace old block lines with new block lines in the output
 
-### Summary
+Simple replacement (replace old block with new block when content differs) is safe, correct, and preserves the ordering benefit of the merge algorithm for unchanged containers. A recursive merge of block interiors would be more nuanced but is not required for correctness.
 
-| Bug | Severity | Affects defaults? | Diagram impact |
-|-----|----------|-------------------|----------------|
-| `_matches_any` false positive | Medium | No (only `**`-prefix patterns) | Empty diagram if user excludes with `**/...` patterns |
-| `_compute_component_id` over-collapse | High | Yes (any project with sub-packages) | Missing nodes, missing edges, architecture misrepresented |
+### Secondary Bug (confirmed): Dotted-key child insertion at wrong position
 
+When new D2 uses dotted-key notation for a new child (`api.router: Router`), the node IS detected as new and IS inserted, but placed at top level before the first edge rather than adjacent to its parent container. D2 renders it correctly (dotted keys work anywhere), but repeated merges create an inconsistent, accumulating top-level list of dotted children separate from their containers.

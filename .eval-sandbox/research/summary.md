@@ -6,71 +6,88 @@
 analyze (ast/regex) → skeleton (budget-aware) → LLM (2-pass copilot) → post-process → merge/write
 ```
 
-## Assessment (Post-Improvements)
+## Current Scores (post prior improvements)
 
-| Layer | Correctness | Drift Risk | Notes |
-|-------|------------|------------|-------|
-| Static analysis | HIGH | LOW | ast.parse + regex fallback; reliable import resolution |
-| Skeleton | HIGH | LOW | Faithful representation; budget redistribution handles small/medium projects |
-| LLM generation | MODERATE | MODERATE | Strong prompt constraints for key reuse; skeleton coverage validation warns on low fidelity; no temperature control (copilot CLI limitation) |
-| Post-processing | HIGH | LOW | D2 parser handles hyphens; container nodes with internal edges protected from orphan removal |
-| Merge/write | HIGH | LOW | Structural diff; 80% removal threshold safety net |
+- **Correctness: 7/10** (was 5/10 before prior improvements)
+- **Drift Reduction: 5/10** (was 3/10 before prior improvements, where 10 = no drift)
 
-## Improvements Made
+## Prior Improvements (already committed)
 
-### 1. D2 Parser: Hyphenated Identifier Support (merger.py:10-14)
-- `_NODE_RE` and `_EDGE_RE` now match hyphens in identifiers (e.g., `auth-service`, `my-app.auth-handler`)
-- Previously silently dropped hyphenated nodes/edges, breaking merge and orphan removal
+1. D2 parser: hyphenated identifier support (merger.py:10-14)
+2. Orphan removal: container node protection (merger.py:340-360)
+3. Skeleton-to-output coverage validation warning at <30% (llm.py:262-320)
+4. Sequence diagram skipping when no entry_points configured (cli.py:54-59)
+5. Stronger prompt constraints: derive IDs from skeleton paths (llm.py:128-140)
 
-### 2. Orphan Removal: Container Node Protection (merger.py:340-360)
-- Container nodes (multi-line blocks with internal edges) are now protected from orphan removal
-- Previously removed valid grouping nodes like `backend { api; db; api -> db }`
+## Remaining Gap Analysis
 
-### 3. Skeleton-to-Output Validation (llm.py:262-320)
-- `_validate_d2()` now accepts the skeleton and checks what fraction of skeleton edges are represented in the D2 output
-- Logs coverage percentage and warns when < 30% of skeleton relationships appear in output
-- Does not reject (LLM output may use different naming), but provides observability
+### Gap D1: Existing node keys not explicitly injected (HIGHEST IMPACT for drift)
 
-### 4. Sequence Diagram Determinism (cli.py:54-59)
-- Sequence diagrams are now skipped when no `entry_points` are configured
-- Previously the LLM was asked to "infer the top 5 most significant entry points", which produced different results each run
-- Users must explicitly configure entry points to get sequence diagrams
+**Evidence:** `llm.py:_build_pass1_update_prompt()` shows the full existing D2 block but only
+instructs "Keep ALL existing component IDs...UNCHANGED". The LLM still has to parse the block
+itself to discover which keys to reuse.
 
-### 5. Stronger Prompt Constraints (llm.py:128-140, 229-235)
-- Pass 1 prompt now instructs the LLM to derive component IDs directly from skeleton file paths
-- Pass 2 prompt reinforces that exact component IDs must be used as D2 node keys
-- Both passes emphasize consistency across runs
+**Problem:** When the LLM sees a large D2 block, it tends to paraphrase/reorganize rather than
+copy verbatim. Even with "keep UNCHANGED" instructions, key drift occurs between runs.
 
-## Remaining Risk Areas
+**Fix:** Call `parse_d2(existing_d2)` to extract node keys and inject them as an explicit list:
+```
+CANONICAL NODE KEYS (reuse VERBATIM): key1, key2, key3, ...
+```
+This converts a fuzzy instruction into a hard, unambiguous constraint that's trivially easy to follow.
 
-### LLM Non-Determinism (Partially Mitigated)
-The `copilot` CLI has no temperature or seed parameters. Prompt improvements and existing-diagram anchoring reduce drift, but cannot eliminate it. This is the dominant remaining risk factor.
+### Gap D2: Skeleton component IDs not seeded into fresh-diagram pass 1 (HIGH IMPACT for drift)
 
-### No Structural Enforcement
-Skeleton coverage check is advisory (logging), not blocking. The LLM could still produce an entirely different diagram structure.
+**Evidence:** `llm.py:_build_pass1_prompt()` tells the LLM to "derive IDs from skeleton paths" but
+doesn't provide a deterministic seed list. The skeleton DEPENDENCIES section contains exactly the
+right component IDs already (`src/api -> src/db` → IDs are `src/api`, `src/db`).
 
-### Token Budget for Large Projects
-At default 30K tokens (~120K chars), large projects will have truncated signatures, giving the LLM less context for naming and grouping.
+**Fix:** Extract component names from DEPENDENCIES section of skeleton and inject as:
+```
+REQUIRED COMPONENT KEYS (derived from your codebase): key1, key2, ...
+Use these keys verbatim as component IDs.
+```
+This eliminates LLM creativity in ID naming for initial generation too.
 
-## Revised Scores
+### Gap C1: Low skeleton coverage triggers no retry (MEDIUM IMPACT for correctness)
 
-- **Correctness under defaults: 7/10** (was 5/10)
-  - D2 parser now handles real-world identifiers
-  - Container nodes protected from erroneous removal
-  - Skeleton coverage provides observability into LLM fidelity
-  - LLM prompts constrain key naming to skeleton paths
+**Evidence:** `llm.py:_check_skeleton_coverage()` (lines ~280-320) logs a warning when coverage
+< 30% but takes no corrective action. If the LLM produces a diagram that only covers 10-15% of
+skeleton relationships, the tool silently accepts it.
 
-- **Minimum drift under defaults: 5/10** (was 3/10, where 10 = no drift)
-  - Non-deterministic sequence diagrams eliminated by default
-  - Strong key-reuse prompts reduce node key churn
-  - Existing-diagram anchoring already worked well (unchanged)
-  - Still limited by LLM non-determinism without temperature control
+**Fix:** In `generate_diagram()`, after `_validate_d2()`, if skeleton coverage < 20%, perform
+a single retry with an error-correction prompt that explicitly lists the missed skeleton edges.
+This adds a correctness enforcement layer.
+
+### Gap D3: Pass 2 doesn't explicitly require alphabetical node ordering (LOW IMPACT)
+
+**Evidence:** The pass 2 prompt says "Declare nodes in alphabetical order" but this is advisory.
+Different orderings don't affect correctness but add noise to diffs.
+
+**Fix (low priority):** Post-process D2 output to normalize top-level node ordering alphabetically.
+
+## Highest-Value Implementation Plan
+
+Priority 1 (Drift, High): Inject explicit node key list into update prompts
+- `llm.py:_build_pass1_update_prompt()` + `_build_pass2_prompt()` when existing_d2 is provided
+- Expected impact: drift 5/10 → 7/10
+
+Priority 2 (Drift, High): Inject skeleton-derived component IDs into fresh-diagram pass 1  
+- `llm.py:_build_pass1_prompt()`: extract IDs from skeleton DEPENDENCIES, inject as required list
+- Expected impact: +1 drift score for fresh diagrams
+
+Priority 3 (Correctness, Medium): Retry on <20% skeleton coverage
+- `llm.py:generate_diagram()`: check coverage after `_validate_d2()`, retry once if < 20%
+- Expected impact: correctness 7/10 → 8/10 for large/complex projects
+
+## Projected Scores After Improvements
+
+- **Correctness: 8/10** (retry catches worst-case LLM drift-offs)
+- **Drift Reduction: 7/10** (explicit key injection drastically reduces key churn)
 
 ## Test Coverage
 
-302 tests pass, including new tests for:
-- Hyphenated node/edge parsing (3 tests)
-- Container node protection in orphan removal (2 tests)
-- Skeleton-to-output coverage validation (3 tests)
-- Skeleton edge extraction (4 tests)
-- Sequence diagram skipping behavior (updated CLI + integration tests)
+310 tests currently passing. New tests needed for:
+- `_build_pass1_update_prompt()` node key injection
+- `_build_pass1_prompt()` skeleton ID injection  
+- Low-coverage retry in `generate_diagram()`

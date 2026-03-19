@@ -1,14 +1,9 @@
 # Research Plan: Diagram Correctness & Drift Under Default Configuration
 
-## Wave 1: End-to-end pipeline analysis
-**Question:** What are the structural correctness guarantees and drift-inducing gaps in the default pipeline (analyze → skeleton → LLM → post-process → merge/write)?
+## Wave 1: End-to-end pipeline analysis + gap identification
+**Question:** What are the highest-value improvements remaining to maximize correctness and drift reduction?
 
-Focus areas:
-- Static analysis fidelity (analyzer accuracy)
-- Skeleton completeness vs truncation
-- LLM prompt constraints and validation
-- Post-processing side effects
-- Merge/drift safeguards
+Focus: Existing pipeline state, current scores, remaining gaps, and concrete actionable improvements.
 
-## Wave 2 (conditional): Test coverage of correctness-critical paths
-**Question:** Do the existing tests exercise the failure modes identified in Wave 1?
+## Wave 2 (conditional): Implementation feasibility check
+**Question:** Are the identified improvements safe to implement given test coverage?
