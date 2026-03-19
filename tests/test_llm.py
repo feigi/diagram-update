@@ -15,6 +15,7 @@ from diagram_update.llm import (
     _retry_generation,
     _validate_d2,
     _extract_skeleton_edges,
+    _extract_pass1_ids,
 )
 from diagram_update.models import LLMError, ToolError
 
@@ -99,6 +100,11 @@ class TestBuildPass1Prompt:
         assert "RELATIONSHIPS:" in prompt
         assert "Output ONLY" in prompt
 
+    def test_determinism_instructions(self):
+        prompt = _build_pass1_prompt("skeleton", "architecture")
+        assert "sorted alphabetically" in prompt
+        assert "Determinism" in prompt
+
 
 class TestBuildPass2Prompt:
     """Tests for Pass 2 prompt construction (D2 generation)."""
@@ -137,6 +143,12 @@ class TestBuildPass2Prompt:
     def test_ends_with_output_instruction(self):
         prompt = _build_pass2_prompt("components", "architecture", None)
         assert "Output ONLY valid D2 code" in prompt
+
+    def test_determinism_rules(self):
+        prompt = _build_pass2_prompt("components", "architecture", None)
+        assert "DETERMINISM" in prompt
+        assert "alphabetical order" in prompt
+        assert "matching '}'" in prompt
 
 
 class TestCheckCopilotAvailable:
@@ -349,9 +361,41 @@ class TestValidateD2:
             _validate_d2(d2, skeleton=skeleton)
         assert "Low skeleton coverage" in caplog.text
 
+    def test_unbalanced_braces_raises(self):
+        """D2 with unbalanced braces should raise LLMError."""
+        with pytest.raises(LLMError, match="unbalanced braces"):
+            _validate_d2("api: API {\n  handler: Handler\n")
+
+    def test_balanced_braces_passes(self):
+        """D2 with balanced braces should pass."""
+        _validate_d2("api: API {\n  handler: Handler\n}\ndb: DB\napi -> db")
+
     def test_skeleton_coverage_none_skipped(self):
         """No skeleton means no coverage check."""
         _validate_d2("api: API\napi -> db")  # Should not raise
+
+
+class TestExtractPass1Ids:
+    """Tests for pass 1 component ID extraction."""
+
+    def test_extracts_standard_ids(self):
+        text = (
+            "COMPONENTS:\n"
+            "- id: api, label: API, type: service\n"
+            "- id: db, label: Database, type: database\n"
+        )
+        assert _extract_pass1_ids(text) == ["api", "db"]
+
+    def test_empty_text_returns_empty(self):
+        assert _extract_pass1_ids("some random text") == []
+
+    def test_strips_trailing_commas(self):
+        text = "- id: api, label: API\n- id: db, label: DB\n"
+        assert _extract_pass1_ids(text) == ["api", "db"]
+
+    def test_dotted_ids(self):
+        text = "- id: src.auth.handler, label: Auth Handler, type: module\n"
+        assert _extract_pass1_ids(text) == ["src.auth.handler"]
 
 
 class TestExtractSkeletonEdges:
@@ -366,12 +410,12 @@ class TestExtractSkeletonEdges:
     def test_handles_weight_annotations(self):
         skeleton = "DEPENDENCIES:\nsrc/api -> src/db (x3)"
         edges = _extract_skeleton_edges(skeleton)
-        assert ("api", "db") in edges
+        assert ("src.api", "src.db") in edges
 
     def test_empty_skeleton_returns_empty(self):
         assert _extract_skeleton_edges("FILE TREE:\napp.py") == []
 
-    def test_extracts_leaf_names(self):
+    def test_extracts_full_dotted_paths(self):
         skeleton = "DEPENDENCIES:\nsrc/auth/handler -> src/db/models"
         edges = _extract_skeleton_edges(skeleton)
-        assert ("handler", "models") in edges
+        assert ("src.auth.handler", "src.db.models") in edges

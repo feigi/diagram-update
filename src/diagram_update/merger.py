@@ -7,9 +7,10 @@ from dataclasses import dataclass, field
 
 # Regex patterns for parsing D2 content
 # Node: identifier optionally followed by label/style/block
-# Supports hyphens in keys (e.g., my-service, auth-api.handler)
+# Supports hyphens and dots in keys (e.g., my-service, auth-api.handler, container.child)
 _NODE_RE = re.compile(r"^([\w][\w.\-]*)(?:\s*:\s*(.+?))?(?:\s*\{)?\s*$")
 # Edge: source -> target with optional label
+# Supports dotted paths for container references (e.g., container.child -> other.child)
 _EDGE_RE = re.compile(
     r"^([\w][\w.\-]*)\s*(->|<->|<-|--)\s*([\w][\w.\-]*)(?:\s*:\s*(.+))?\s*$"
 )

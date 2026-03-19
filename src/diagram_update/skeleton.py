@@ -327,7 +327,10 @@ def _build_dependency_edges(graph: DependencyGraph) -> str:
     if not graph.relationships:
         return ""
 
-    sorted_rels = sorted(graph.relationships, key=lambda r: r.weight, reverse=True)
+    sorted_rels = sorted(
+        graph.relationships,
+        key=lambda r: (-r.weight, r.source, r.target),
+    )
 
     lines: list[str] = []
     for rel in sorted_rels:

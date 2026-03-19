@@ -17,6 +17,9 @@ _FENCE_RE = re.compile(
     re.DOTALL,
 )
 
+# Pattern to extract component IDs from pass 1 structured output
+_COMPONENT_ID_RE = re.compile(r"^\s*-\s*id:\s*(\S+)", re.MULTILINE)
+
 
 def generate_diagram(
     skeleton: str,
@@ -45,7 +48,12 @@ def generate_diagram(
     if not components_text.strip():
         raise LLMError("Empty response from copilot (pass 1: component identification)")
 
-    logger.info("Pass 1 complete: %d chars of component text", len(components_text))
+    # Validate pass 1 structure and extract component IDs
+    pass1_ids = _extract_pass1_ids(components_text)
+    if pass1_ids:
+        logger.info("Pass 1 complete: %d components identified", len(pass1_ids))
+    else:
+        logger.warning("Pass 1 returned text but no parseable component IDs")
 
     # Pass 2: Convert to D2 code
     logger.info("Pass 2: generating D2 code for %s...", diagram_type)
@@ -130,16 +138,18 @@ def _build_pass1_prompt(
         "For example, if the skeleton shows 'src/auth/handler.py', use 'auth.handler' as the id. "
         "Do NOT invent new names — derive IDs directly from the skeleton paths.",
         "",
-        "Output a structured list:",
+        "Output a structured list, with components sorted alphabetically by id:",
         "COMPONENTS:",
         "- id: <key derived from skeleton path>, label: <human name>, type: <service|module|database|queue|external>",
         "- ...",
         "",
         "RELATIONSHIPS:",
         "- <source_id> -> <target_id>: <relationship description>",
+        "(List relationships sorted by source_id, then target_id)",
         "- ...",
         "",
-        "Output ONLY the structured list, no explanations.",
+        "Output ONLY the structured list, no explanations. "
+        "Determinism matters: always produce the same output for the same input.",
     ])
 
     return "\n".join(parts)
@@ -232,8 +242,13 @@ def _build_pass2_prompt(
 
     parts.extend([
         "",
-        "IMPORTANT: Use the exact component IDs from the list above as D2 node keys. "
-        "Do NOT rename, abbreviate, or rephrase them. Consistency of keys across runs is critical.",
+        "IMPORTANT RULES FOR DETERMINISM:",
+        "1. Use the EXACT component IDs from the list above as D2 node keys — "
+        "do NOT rename, abbreviate, or rephrase them.",
+        "2. Declare nodes in alphabetical order by key.",
+        "3. Declare edges in alphabetical order by source, then target.",
+        "4. Ensure every '{' has a matching '}' on its own line.",
+        "5. Every edge endpoint must reference a declared node key.",
         "",
         "Output ONLY valid D2 code. No markdown fences, no explanations.",
     ])
@@ -275,6 +290,9 @@ def _validate_d2(d2: str, skeleton: str | None = None) -> None:
     """
     from diagram_update.merger import parse_d2
 
+    # Check balanced braces
+    _check_balanced_braces(d2)
+
     parsed = parse_d2(d2)
     if not parsed.node_keys:
         raise LLMError("Generated D2 contains no nodes")
@@ -283,28 +301,12 @@ def _validate_d2(d2: str, skeleton: str | None = None) -> None:
             "Generated D2 has %d node(s) but no edges", len(parsed.node_keys)
         )
 
+    # Check that edge endpoints reference declared nodes or their children
+    _check_edge_endpoints(parsed)
+
     # Check skeleton relationship coverage if skeleton provided
     if skeleton:
-        skeleton_edges = _extract_skeleton_edges(skeleton)
-        if skeleton_edges:
-            d2_node_lower = {k.lower() for k in parsed.node_keys}
-            covered = 0
-            for source, target in skeleton_edges:
-                # Check if both source and target appear as substrings in any D2 node key
-                src_found = any(source in k for k in d2_node_lower)
-                tgt_found = any(target in k for k in d2_node_lower)
-                if src_found and tgt_found:
-                    covered += 1
-            coverage = covered / len(skeleton_edges) if skeleton_edges else 1.0
-            logger.info(
-                "Skeleton coverage: %d/%d edges (%.0f%%)",
-                covered, len(skeleton_edges), coverage * 100,
-            )
-            if coverage < 0.3:
-                logger.warning(
-                    "Low skeleton coverage (%.0f%%): LLM output may not reflect codebase structure",
-                    coverage * 100,
-                )
+        _check_skeleton_coverage(parsed, skeleton)
 
     logger.debug(
         "D2 validation passed: %d nodes, %d edges",
@@ -313,8 +315,94 @@ def _validate_d2(d2: str, skeleton: str | None = None) -> None:
     )
 
 
+def _check_balanced_braces(d2: str) -> None:
+    """Verify that braces are balanced in the D2 output."""
+    depth = 0
+    for i, ch in enumerate(d2):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                raise LLMError(
+                    f"Generated D2 has unbalanced braces (unexpected '}}' at char {i})"
+                )
+    if depth != 0:
+        raise LLMError(
+            f"Generated D2 has unbalanced braces ({depth} unclosed '{{' remaining)"
+        )
+
+
+def _check_edge_endpoints(parsed: object) -> None:
+    """Warn if edge endpoints don't reference any declared node."""
+    all_node_keys = parsed.node_keys
+    if not all_node_keys:
+        return
+
+    for source, _, target in parsed.edge_tuples:
+        for endpoint in (source, target):
+            # An endpoint is valid if it matches a node key directly,
+            # or if it's a dotted child of a node (container.child)
+            found = endpoint in all_node_keys
+            if not found:
+                # Check if any node is a prefix (container reference)
+                for key in all_node_keys:
+                    if endpoint.startswith(key + ".") or key.startswith(endpoint + "."):
+                        found = True
+                        break
+            if not found:
+                logger.warning(
+                    "Edge endpoint %r not found in declared nodes", endpoint
+                )
+
+
+def _check_skeleton_coverage(parsed: object, skeleton: str) -> None:
+    """Check how well the D2 output covers skeleton relationships."""
+    skeleton_edges = _extract_skeleton_edges(skeleton)
+    if not skeleton_edges:
+        return
+
+    d2_node_lower = {k.lower() for k in parsed.node_keys}
+    covered = 0
+    for source, target in skeleton_edges:
+        # Match if skeleton edge component appears as substring or suffix of any D2 node
+        src_found = any(
+            source in k or source.split(".")[-1] in k for k in d2_node_lower
+        )
+        tgt_found = any(
+            target in k or target.split(".")[-1] in k for k in d2_node_lower
+        )
+        if src_found and tgt_found:
+            covered += 1
+    coverage = covered / len(skeleton_edges)
+    logger.info(
+        "Skeleton coverage: %d/%d edges (%.0f%%)",
+        covered, len(skeleton_edges), coverage * 100,
+    )
+    if coverage < 0.3:
+        logger.warning(
+            "Low skeleton coverage (%.0f%%): LLM output may not reflect codebase structure",
+            coverage * 100,
+        )
+
+
+def _extract_pass1_ids(components_text: str) -> list[str]:
+    """Extract component IDs from pass 1 structured output.
+
+    Returns a list of IDs in order, or empty list if the format
+    doesn't match the expected structured output.
+    """
+    ids = _COMPONENT_ID_RE.findall(components_text)
+    # Strip trailing commas that might be part of "id: foo, label: bar"
+    return [id_.rstrip(",") for id_ in ids]
+
+
 def _extract_skeleton_edges(skeleton: str) -> list[tuple[str, str]]:
-    """Extract (source, target) pairs from DEPENDENCIES section of skeleton."""
+    """Extract (source, target) pairs from DEPENDENCIES section of skeleton.
+
+    Uses both full path and leaf name for matching to avoid false positives
+    when multiple components share the same leaf name.
+    """
     edges: list[tuple[str, str]] = []
     in_deps = False
     for line in skeleton.splitlines():
@@ -328,8 +416,11 @@ def _extract_skeleton_edges(skeleton: str) -> list[tuple[str, str]]:
             if "->" in line:
                 parts = line.split("->", 1)
                 if len(parts) == 2:
-                    src = parts[0].strip().split("/")[-1].lower()
-                    tgt = parts[1].strip().split("(")[0].strip().split("/")[-1].lower()
+                    src_raw = parts[0].strip().lower()
+                    tgt_raw = parts[1].strip().split("(")[0].strip().lower()
+                    # Use full path for more precise matching
+                    src = src_raw.replace("/", ".")
+                    tgt = tgt_raw.replace("/", ".")
                     if src and tgt:
                         edges.append((src, tgt))
     return edges
