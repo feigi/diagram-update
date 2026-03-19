@@ -64,6 +64,10 @@ def generate_diagram(
     if not d2.strip():
         raise LLMError("Empty response from copilot after retry")
 
+    # Collapse duplicate edges between same source/target pairs
+    from diagram_update.merger import collapse_edges
+    d2 = collapse_edges(d2)
+
     _validate_d2(d2)
     return d2
 

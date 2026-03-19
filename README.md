@@ -56,6 +56,53 @@ Output files:
 | `docs/diagrams/dependencies.d2` | Package/module import graph |
 | `docs/diagrams/flow-*.d2` | Sequence diagrams for key call flows |
 
+## How it works internally
+
+### 1. Static analysis
+
+The analyzer walks the project tree (filtered by include/exclude globs) and detects source files by extension (`.py`, `.java`, `.c`/`.h`). Each file is parsed with a language-specific import parser that extracts import statements into a uniform `ImportInfo` model. Imports are then resolved against the project's own files to distinguish internal from external dependencies.
+
+Files are grouped into **components** based on the configured granularity (`module`, `package`, or `directory`). Import edges between files are aggregated up to the component level, producing a `DependencyGraph` of components and weighted relationships.
+
+### 2. Skeleton generation
+
+The dependency graph is condensed into a token-efficient text skeleton that fits within a configurable budget (default 5 000 tokens). The budget is split across three sections:
+
+| Section | Budget | Content |
+|---|---|---|
+| **File tree** | ~20% | Directory structure with line counts |
+| **Signatures** | ~50% | Function/class signatures ranked by cross-file reference count (most-imported first) |
+| **Dependencies** | ~30% | Component edges sorted by weight, e.g. `src/api -> src/db (x5)` |
+
+Each section is independently truncated to its word limit so the overall skeleton stays compact regardless of project size.
+
+### 3. Two-pass LLM generation
+
+The skeleton is sent to an LLM (via GitHub Copilot CLI) in two passes:
+
+- **Pass 1 -- Component identification**: The LLM reads the skeleton and outputs a structured list of components (with ids, labels, and types like service/module/database/queue/external) and their relationships with semantic descriptions.
+- **Pass 2 -- D2 code generation**: The structured list is converted into valid D2 syntax with containers, shapes, and labeled edges. If an existing diagram is provided, the LLM is asked to preserve its structure and only apply changes.
+
+If pass 2 returns empty output, an automatic retry with an error-correction prompt is attempted.
+
+### 4. Post-processing
+
+Generated D2 goes through two cleanup steps before being written:
+
+- **Edge collapsing**: When the LLM produces multiple edges between the same pair of nodes (e.g. `api -> db: reads` and `api -> db: writes`), they are collapsed into a single edge with a merged label (`api -> db: reads, writes`). For four or more edges sharing a common label prefix, the label is summarized (e.g. `imports (4x)`).
+- **Validation**: The D2 is parsed to verify it contains at least one node and one edge.
+
+### 5. Merge and write
+
+Output files are written to `docs/diagrams/`. When a diagram file already exists, an **anchor-based merge** is applied:
+
+1. Both the old and new D2 are parsed to extract nodes (with block spans) and edges (with labels).
+2. Added nodes are inserted before the first edge line; removed nodes (and their blocks) are deleted.
+3. Existing edges whose labels changed are updated in-place; new edges are appended at the end.
+4. Comments and layout hints in the old file are preserved.
+
+As a safety net, if a merge would remove more than 80% of existing nodes, the result is written to a `.d2.new` sidecar file instead of overwriting.
+
 ## Configuration
 
 Create a `.diagram-update.yml` in your project root:

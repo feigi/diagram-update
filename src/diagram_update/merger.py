@@ -204,6 +204,122 @@ def check_removal_threshold(
     return removal_fraction > threshold
 
 
+def collapse_edges(d2: str) -> str:
+    """Collapse duplicate edges between the same (source, target) pair.
+
+    When multiple edges share the same source, direction, and target,
+    merge them into a single edge with combined labels:
+    - 1 label: kept as-is
+    - 2-3 labels: comma-separated list
+    - 4+ labels: common prefix + count, or short list if no common prefix
+    """
+    lines = d2.splitlines()
+    # Collect edges in order: (source, direction, target) -> list of (label, line_index)
+    edge_groups: dict[tuple[str, str, str], list[tuple[str, int]]] = {}
+    edge_order: list[tuple[str, str, str]] = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        edge_match = _EDGE_RE.match(stripped)
+        if edge_match:
+            source = edge_match.group(1)
+            direction = edge_match.group(2)
+            target = edge_match.group(3)
+            label = (edge_match.group(4) or "").strip()
+            key = (source, direction, target)
+            if key not in edge_groups:
+                edge_groups[key] = []
+                edge_order.append(key)
+            edge_groups[key].append((label, i))
+
+    # Nothing to collapse
+    if all(len(v) <= 1 for v in edge_groups.values()):
+        return d2
+
+    # Build set of lines to remove (duplicate edge lines)
+    remove_lines: set[int] = set()
+    # Map first occurrence line -> merged label
+    replace_lines: dict[int, str] = {}
+
+    for key, entries in edge_groups.items():
+        if len(entries) <= 1:
+            continue
+
+        source, direction, target = key
+        labels = [label for label, _ in entries if label]
+        first_line_idx = entries[0][1]
+
+        # Remove all but first occurrence
+        for _, line_idx in entries[1:]:
+            remove_lines.add(line_idx)
+
+        merged_label = _merge_labels(labels)
+        if merged_label:
+            replace_lines[first_line_idx] = (
+                f"{source} {direction} {target}: {merged_label}"
+            )
+        else:
+            replace_lines[first_line_idx] = (
+                f"{source} {direction} {target}"
+            )
+
+    output = []
+    for i, line in enumerate(lines):
+        if i in remove_lines:
+            continue
+        if i in replace_lines:
+            output.append(replace_lines[i])
+        else:
+            output.append(line)
+
+    return "\n".join(output)
+
+
+def _merge_labels(labels: list[str]) -> str:
+    """Merge multiple edge labels into a single label."""
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for label in labels:
+        if label and label not in seen:
+            seen.add(label)
+            unique.append(label)
+
+    if not unique:
+        return ""
+    if len(unique) == 1:
+        return unique[0]
+
+    # For 2-3 unique labels, use a comma-separated list
+    if len(unique) <= 3:
+        return ", ".join(unique)
+
+    # For 4+ labels, try to find a common prefix
+    prefix = _common_prefix(unique)
+    if prefix:
+        return f"{prefix} ({len(unique)}x)"
+
+    # Fall back to first 3 + count
+    return ", ".join(unique[:3]) + f" (+{len(unique) - 3} more)"
+
+
+def _common_prefix(labels: list[str]) -> str:
+    """Find a meaningful common prefix among labels."""
+    if not labels:
+        return ""
+    words_lists = [label.split() for label in labels]
+    min_len = min(len(w) for w in words_lists)
+    prefix_words: list[str] = []
+    for i in range(min_len):
+        if all(w[i] == words_lists[0][i] for w in words_lists):
+            prefix_words.append(words_lists[0][i])
+        else:
+            break
+    result = " ".join(prefix_words)
+    # Only use prefix if it's meaningful (at least one word)
+    return result if result else ""
+
+
 def _is_config_line(stripped: str) -> bool:
     """Check if a line is part of the D2 config/header block."""
     for prefix in _SKIP_PREFIXES:

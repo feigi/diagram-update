@@ -1,6 +1,11 @@
 """Tests for the anchor-based D2 diagram merger."""
 
-from diagram_update.merger import check_removal_threshold, merge_diagrams, parse_d2
+from diagram_update.merger import (
+    check_removal_threshold,
+    collapse_edges,
+    merge_diagrams,
+    parse_d2,
+)
 
 
 # --- parse_d2 tests ---
@@ -220,3 +225,82 @@ class TestCheckRemovalThreshold:
         merged = "a\nb"  # 50% removed
         assert check_removal_threshold(old, merged, threshold=0.4) is True
         assert check_removal_threshold(old, merged, threshold=0.6) is False
+
+
+# --- collapse_edges tests ---
+
+
+class TestCollapseEdges:
+    def test_no_duplicates_unchanged(self) -> None:
+        d2 = "api -> db: reads\napi -> cache: writes"
+        assert collapse_edges(d2) == d2
+
+    def test_single_edge_unchanged(self) -> None:
+        d2 = "api -> db: reads"
+        assert collapse_edges(d2) == d2
+
+    def test_two_edges_merged_as_list(self) -> None:
+        d2 = "api -> db: reads\napi -> db: writes"
+        result = collapse_edges(d2)
+        assert "api -> db: reads, writes" in result
+        assert result.count("api -> db") == 1
+
+    def test_three_edges_merged_as_list(self) -> None:
+        d2 = "api -> db: reads\napi -> db: writes\napi -> db: deletes"
+        result = collapse_edges(d2)
+        assert "api -> db: reads, writes, deletes" in result
+        assert result.count("api -> db") == 1
+
+    def test_four_plus_edges_with_common_prefix(self) -> None:
+        d2 = (
+            "api -> db: imports foo\n"
+            "api -> db: imports bar\n"
+            "api -> db: imports baz\n"
+            "api -> db: imports qux"
+        )
+        result = collapse_edges(d2)
+        assert result.count("api -> db") == 1
+        assert "imports (4x)" in result
+
+    def test_four_plus_edges_no_common_prefix(self) -> None:
+        d2 = (
+            "api -> db: reads\n"
+            "api -> db: writes\n"
+            "api -> db: deletes\n"
+            "api -> db: updates"
+        )
+        result = collapse_edges(d2)
+        assert result.count("api -> db") == 1
+        assert "+1 more" in result
+
+    def test_preserves_non_edge_lines(self) -> None:
+        d2 = "api: API Server\ndb: Database\napi -> db: reads\napi -> db: writes"
+        result = collapse_edges(d2)
+        assert "api: API Server" in result
+        assert "db: Database" in result
+        assert "api -> db: reads, writes" in result
+
+    def test_duplicate_labels_deduped(self) -> None:
+        d2 = "api -> db: reads\napi -> db: reads"
+        result = collapse_edges(d2)
+        assert "api -> db: reads" in result
+        assert result.count("api -> db") == 1
+
+    def test_unlabeled_duplicates(self) -> None:
+        d2 = "api -> db\napi -> db"
+        result = collapse_edges(d2)
+        assert result.count("api -> db") == 1
+
+    def test_mixed_labeled_and_unlabeled(self) -> None:
+        d2 = "api -> db\napi -> db: reads"
+        result = collapse_edges(d2)
+        assert result.count("api -> db") == 1
+        assert "reads" in result
+
+    def test_multiple_groups_collapsed_independently(self) -> None:
+        d2 = "api -> db: reads\napi -> db: writes\nauth -> db: validates\nauth -> db: checks"
+        result = collapse_edges(d2)
+        assert "api -> db: reads, writes" in result
+        assert "auth -> db: validates, checks" in result
+        assert result.count("api -> db") == 1
+        assert result.count("auth -> db") == 1
