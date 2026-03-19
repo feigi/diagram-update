@@ -81,7 +81,15 @@ entry_points:
 model: claude-sonnet-4.6
 ```
 
-All fields are optional -- without a config file, sensible defaults are used.
+All fields are optional -- without a config file, sensible defaults are used:
+
+| Field | Default | Description |
+|---|---|---|
+| `include` | `["**/*"]` | Glob patterns for files to analyze |
+| `exclude` | `["tests/**", "test/**", "vendor/**", "node_modules/**", ".git/**"]` | Glob patterns to skip |
+| `granularity` | `"package"` | Component grouping: `directory`, `package`, or `module` |
+| `entry_points` | `[]` | Entry points for sequence diagram tracing |
+| `model` | `"claude-sonnet-4.6"` | Copilot CLI model to use |
 
 ## Development
 
