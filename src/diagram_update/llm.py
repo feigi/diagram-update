@@ -6,6 +6,7 @@ import logging
 import re
 import shutil
 import subprocess
+import sys
 
 from diagram_update.models import LLMError, ToolError
 
@@ -523,6 +524,10 @@ def _stream_copilot_live(cmd: list[str], timeout: int) -> str:
                     break
     finally:
         proc.stdout.close()
+        # Rich's Live display can leave the terminal in application cursor-keys
+        # mode (DECCKM). Reset it so arrow keys work normally afterwards.
+        sys.stdout.write("\x1b[?1l")
+        sys.stdout.flush()
 
     if timed_out:
         raise LLMError(f"copilot timed out after {timeout}s")
