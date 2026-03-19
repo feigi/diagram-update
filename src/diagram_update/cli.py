@@ -131,7 +131,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--timeout",
         type=int,
         default=None,
-        help="Timeout in seconds for each LLM call (default: from config or 300)",
+        help="Timeout in seconds for each LLM call (default: from config or 600)",
     )
     return parser.parse_args(argv)
 

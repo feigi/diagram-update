@@ -30,7 +30,7 @@ class DiagramConfig:
     entry_points: list[str] = field(default_factory=list)
     model: str = "claude-sonnet-4.6"
     token_budget: int = 30000
-    timeout: int = 300
+    timeout: int = 600
 
 
 @dataclass
