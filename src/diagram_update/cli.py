@@ -155,7 +155,7 @@ def _read_existing_diagram(diagrams_dir: Path, diagram_type: str) -> str | None:
 
 def _setup_logging(verbose: bool) -> None:
     """Configure logging level."""
-    level = logging.INFO if verbose else logging.WARNING
+    level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
         format="%(message)s",
