@@ -222,18 +222,13 @@ flows: Flows {
 }"""
 
 
-def _mock_llm_side_effects(include_sequence: bool = False):
-    """Return side_effect list for diagram types (2 calls each).
-
-    By default, sequence is skipped (no entry_points configured).
-    """
-    effects = [
+def _mock_llm_side_effects():
+    """Return side_effect list for all three diagram types (2 calls each)."""
+    return [
         _COMPONENTS_RESPONSE, _ARCH_D2,   # architecture
         _COMPONENTS_RESPONSE, _DEPS_D2,   # dependencies
+        _COMPONENTS_RESPONSE, _SEQ_D2,    # sequence (entry points inferred by LLM)
     ]
-    if include_sequence:
-        effects.extend([_COMPONENTS_RESPONSE, _SEQ_D2])  # sequence
-    return effects
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +360,7 @@ class TestFullPipelinePython:
         diagrams = tmp_path / "docs" / "diagrams"
         assert (diagrams / "architecture.d2").exists()
         assert (diagrams / "dependencies.d2").exists()
-        # sequence.d2 not generated without entry_points
+        assert (diagrams / "sequence.d2").exists()
 
     def test_architecture_d2_has_nodes_and_edges(self, tmp_path: Path) -> None:
         _build_python_project(tmp_path)
@@ -383,7 +378,7 @@ class TestFullPipelinePython:
         assert "->" in content
 
     def test_sequence_d2_generated_with_entry_points(self, tmp_path: Path) -> None:
-        """Sequence diagrams are generated when entry_points are configured."""
+        """Sequence diagrams include explicit entry points when configured."""
         _build_python_project(tmp_path)
         cfg = tmp_path / ".diagram-update.yml"
         cfg.write_text("entry_points:\n  - myapp.app.create_app\n")
@@ -391,7 +386,7 @@ class TestFullPipelinePython:
         with patch("diagram_update.llm._check_copilot_available"):
             with patch(
                 "diagram_update.llm._call_copilot",
-                side_effect=_mock_llm_side_effects(include_sequence=True),
+                side_effect=_mock_llm_side_effects(),
             ):
                 main([str(tmp_path)])
 
@@ -573,18 +568,18 @@ class TestErrorPathIntegration:
         _build_python_project(tmp_path)
 
         # Empty pass1 raises LLMError immediately (1 call consumed for deps)
-        # sequence is skipped (no entry_points)
         with patch("diagram_update.llm._check_copilot_available"):
             with patch(
                 "diagram_update.llm._call_copilot",
                 side_effect=[
-                    _COMPONENTS_RESPONSE, _ARCH_D2,  # arch ok
-                    "",                                # deps pass1 fails (empty)
+                    _COMPONENTS_RESPONSE, _ARCH_D2,    # arch ok
+                    "",                                 # deps pass1 fails (empty)
+                    _COMPONENTS_RESPONSE, _SEQ_D2,     # sequence ok
                 ],
             ):
                 result = main([str(tmp_path)])
 
-        # Partial success (1 of 2 attempted succeeded)
+        # Partial success (2 of 3 attempted succeeded)
         assert result == 0
         diagrams = tmp_path / "docs" / "diagrams"
         assert (diagrams / "architecture.d2").exists()

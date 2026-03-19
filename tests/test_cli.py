@@ -31,16 +31,13 @@ def test_missing_copilot_binary(tmp_path: Path, capsys) -> None:
 
     with patch("diagram_update.llm.shutil.which", return_value=None):
         result = main([str(tmp_path)])
-    # All diagram types fail (architecture + dependencies), sequence skipped
+    # All three diagram types fail (architecture + dependencies + sequence)
     assert result == 1
     assert "Copilot CLI" in capsys.readouterr().err
 
 
 def test_full_pipeline_success(tmp_path: Path, capsys) -> None:
-    """CLI runs full pipeline generating architecture and dependencies diagrams.
-
-    Sequence diagrams are skipped when no entry_points are configured.
-    """
+    """CLI runs full pipeline generating all three diagram types."""
     pkg = tmp_path / "src"
     pkg.mkdir()
     (pkg / "app.py").write_text("import os\n")
@@ -54,6 +51,7 @@ def test_full_pipeline_success(tmp_path: Path, capsys) -> None:
             side_effect=[
                 fake_components, fake_d2,  # architecture
                 fake_components, fake_d2,  # dependencies
+                fake_components, fake_d2,  # sequence (entry points inferred by LLM)
             ],
         ):
             result = main([str(tmp_path)])
@@ -87,7 +85,7 @@ def test_partial_failure_continues(tmp_path: Path, capsys) -> None:
             side_effect=[
                 fake_components, fake_d2,  # architecture succeeds
                 "",  # dependencies pass1 fails (empty)
-                # sequence skipped (no entry_points)
+                fake_components, fake_d2,  # sequence succeeds
             ],
         ):
             result = main([str(tmp_path)])
@@ -99,10 +97,7 @@ def test_partial_failure_continues(tmp_path: Path, capsys) -> None:
 
 
 def test_all_diagrams_fail(tmp_path: Path, capsys) -> None:
-    """CLI returns error code when all attempted diagram types fail.
-
-    Sequence is skipped (no entry_points), so only architecture + dependencies run.
-    """
+    """CLI returns error code when all three diagram types fail."""
     pkg = tmp_path / "src"
     pkg.mkdir()
     (pkg / "app.py").write_text("import os\n")
@@ -111,8 +106,7 @@ def test_all_diagrams_fail(tmp_path: Path, capsys) -> None:
         with patch("diagram_update.llm._call_copilot", return_value=""):
             result = main([str(tmp_path)])
 
-    # architecture and dependencies both fail, sequence skipped
-    # 2 errors == 2 attempted (not 3), so errors == len attempted
+    # All three fail (architecture + dependencies + sequence), errors == attempted
     assert result == 1
 
 
@@ -127,7 +121,7 @@ def test_verbose_flag(tmp_path: Path) -> None:
     with patch("diagram_update.llm._check_copilot_available"):
         with patch(
             "diagram_update.llm._call_copilot",
-            side_effect=[fake_components, fake_d2] * 2,  # architecture + dependencies
+            side_effect=[fake_components, fake_d2] * 3,  # architecture + dependencies + sequence
         ):
             result = main([str(tmp_path), "-v"])
     assert result == 0

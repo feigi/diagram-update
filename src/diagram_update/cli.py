@@ -55,12 +55,6 @@ def main(argv: list[str] | None = None) -> int:
     attempted = 0
     diagrams_dir = project_root / "docs" / "diagrams"
     for diagram_type in _DIAGRAM_TYPES:
-        # Skip sequence diagrams when no entry points are configured —
-        # without explicit entry points, the LLM infers them non-deterministically
-        if diagram_type == "sequence" and not config.entry_points:
-            logger.info("Skipping sequence diagram: no entry_points configured")
-            continue
-
         attempted += 1
 
         logger.info("[2/4] Building %s skeleton ...", diagram_type)
@@ -72,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("[2/4] Skeleton: %d chars", len(skeleton))
 
         logger.info("[3/4] Generating %s diagram ...", diagram_type)
+        if diagram_type == "sequence" and not config.entry_points:
+            logger.info("[3/4] No entry_points configured — LLM will infer them from the codebase")
 
         # Read existing diagram so the LLM can preserve node keys
         existing_d2 = _read_existing_diagram(diagrams_dir, diagram_type)
