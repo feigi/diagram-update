@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import os
 from collections import defaultdict
 from pathlib import Path
 
@@ -72,36 +73,53 @@ def analyze(config: DiagramConfig, project_root: Path) -> DependencyGraph:
 
 
 def _walk_files(config: DiagramConfig, project_root: Path) -> dict[str, FileInfo]:
-    """Walk project directory applying include/exclude filters."""
+    """Walk project directory applying include/exclude filters.
+
+    Uses os.walk with topdown=True so that excluded directories are pruned
+    before their contents are traversed — critical for large projects where
+    build artifacts (build/, .gradle/, etc.) can contain tens of thousands
+    of files that would otherwise be stat-ed and discarded.
+    """
     files: dict[str, FileInfo] = {}
 
-    for path in sorted(project_root.rglob("*")):
-        if not path.is_file():
-            continue
+    for root_str, dirnames, filenames in os.walk(str(project_root), topdown=True):
+        root_path = Path(root_str)
+        rel_root = root_path.relative_to(project_root)
+        rel_root_str = str(rel_root)
 
-        rel = path.relative_to(project_root)
-        rel_str = str(rel)
+        # Prune excluded directories in-place; os.walk skips pruned dirs.
+        pruned: list[str] = []
+        for d in sorted(dirnames):
+            rel_dir = d if rel_root_str == "." else f"{rel_root_str}/{d}"
+            if not _matches_any(rel_dir, config.exclude):
+                pruned.append(d)
+        dirnames[:] = pruned
 
-        ext = path.suffix
-        if ext not in LANGUAGE_EXTENSIONS:
-            continue
+        for filename in sorted(filenames):
+            path = root_path / filename
+            rel = path.relative_to(project_root)
+            rel_str = str(rel)
 
-        if not _matches_any(rel_str, config.include):
-            continue
-        if _matches_any(rel_str, config.exclude):
-            continue
+            ext = path.suffix
+            if ext not in LANGUAGE_EXTENSIONS:
+                continue
 
-        language = LANGUAGE_EXTENSIONS[ext]
-        try:
-            line_count = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
-        except OSError:
-            line_count = 0
+            if not _matches_any(rel_str, config.include):
+                continue
+            if _matches_any(rel_str, config.exclude):
+                continue
 
-        files[rel_str] = FileInfo(
-            path=rel,
-            language=language,
-            line_count=line_count,
-        )
+            language = LANGUAGE_EXTENSIONS[ext]
+            try:
+                line_count = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+            except OSError:
+                line_count = 0
+
+            files[rel_str] = FileInfo(
+                path=rel,
+                language=language,
+                line_count=line_count,
+            )
 
     return files
 
@@ -126,7 +144,10 @@ def _matches_any(path_str: str, patterns: list[str]) -> bool:
 
 def _parse_imports(files: dict[str, FileInfo], project_root: Path) -> None:
     """Parse imports from all source files."""
-    for rel_str, file_info in files.items():
+    total = len(files)
+    for i, (rel_str, file_info) in enumerate(files.items()):
+        if total >= 50 and i > 0 and i % 100 == 0:
+            logger.info("Parsing imports: %d/%d files ...", i, total)
         full_path = project_root / rel_str
         if file_info.language == "python":
             file_info.imports = parse_python_file(full_path)

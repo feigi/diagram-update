@@ -242,10 +242,13 @@ def _truncate_to_chars(text: str, max_chars: int) -> tuple[str, bool]:
 
 def _extract_all_signatures(graph: DependencyGraph, project_root: Path) -> None:
     """Extract signatures for all files in the graph."""
-    for rel_str, file_info in graph.files.items():
-        if not file_info.signatures:
-            full_path = project_root / rel_str
-            file_info.signatures = extract_signatures(full_path, file_info.language)
+    items = [(rel_str, fi) for rel_str, fi in graph.files.items() if not fi.signatures]
+    total = len(items)
+    for i, (rel_str, file_info) in enumerate(items):
+        if total >= 50 and i > 0 and i % 100 == 0:
+            logger.info("Extracting signatures: %d/%d files ...", i, total)
+        full_path = project_root / rel_str
+        file_info.signatures = extract_signatures(full_path, file_info.language)
 
 
 def _compute_reference_counts(graph: DependencyGraph) -> Counter[str]:

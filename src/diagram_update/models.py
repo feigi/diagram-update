@@ -18,6 +18,12 @@ class DiagramConfig:
             "vendor/**",
             "node_modules/**",
             ".git/**",
+            "build/**",
+            "bin/**",
+            ".gradle/**",
+            ".idea/**",
+            "out/**",
+            "target/**",
         ]
     )
     granularity: str = "package"
