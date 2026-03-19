@@ -38,24 +38,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Config error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"Analyzing {project_root} ...")
+    logger.info("[1/4] Analyzing %s ...", project_root)
     graph = analyze(config, project_root)
-    print(
-        f"Found {len(graph.components)} components, "
-        f"{len(graph.relationships)} relationships"
+    logger.info(
+        "[1/4] Found %d components, %d relationships",
+        len(graph.components), len(graph.relationships),
     )
 
-    print("Building codebase skeleton ...")
+    logger.info("[2/4] Building codebase skeleton ...")
     skeleton = generate_skeleton(graph, project_root)
-    logger.debug("Skeleton length: %d chars", len(skeleton))
+    logger.info("[2/4] Skeleton: %d chars", len(skeleton))
 
     errors = 0
     diagrams_dir = project_root / "docs" / "diagrams"
     for diagram_type in _DIAGRAM_TYPES:
-        print(f"Generating {diagram_type} diagram ...")
+        logger.info("[3/4] Generating %s diagram ...", diagram_type)
 
         # Read existing diagram so the LLM can preserve node keys
         existing_d2 = _read_existing_diagram(diagrams_dir, diagram_type)
+        if existing_d2:
+            logger.info("[3/4] Found existing %s diagram, passing to LLM", diagram_type)
 
         try:
             d2_code = generate_diagram(
@@ -70,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
             errors += 1
             continue
 
+        logger.info("[4/4] Writing %s diagram ...", diagram_type)
         output_path = write_diagram(d2_code, diagram_type, project_root)
         print(f"Wrote {output_path}")
 
@@ -120,8 +123,8 @@ def _read_existing_diagram(diagrams_dir: Path, diagram_type: str) -> str | None:
 
 def _setup_logging(verbose: bool) -> None:
     """Configure logging level."""
-    level = logging.DEBUG if verbose else logging.WARNING
+    level = logging.INFO if verbose else logging.WARNING
     logging.basicConfig(
         level=level,
-        format="%(levelname)s: %(message)s",
+        format="%(message)s",
     )
