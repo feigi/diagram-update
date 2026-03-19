@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from diagram_update.models import DependencyGraph
@@ -240,15 +243,92 @@ def _truncate_to_chars(text: str, max_chars: int) -> tuple[str, bool]:
     return "\n".join(result_lines), True
 
 
+def _load_sig_cache(project_root: Path) -> dict:
+    """Load signature cache from .diagram-update.cache. Return empty dict if missing/corrupt."""
+    cache_path = project_root / ".diagram-update.cache"
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("version") == 1:
+            return data
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass
+    return {}
+
+
+def _save_sig_cache(project_root: Path, cache: dict) -> None:
+    """Write signature cache JSON to project root."""
+    cache_path = project_root / ".diagram-update.cache"
+    try:
+        cache_path.write_text(json.dumps(cache), encoding="utf-8")
+    except OSError:
+        logger.debug("Failed to write signature cache")
+
+
 def _extract_all_signatures(graph: DependencyGraph, project_root: Path) -> None:
-    """Extract signatures for all files in the graph."""
+    """Extract signatures for all files in the graph, with mtime+size caching."""
     items = [(rel_str, fi) for rel_str, fi in graph.files.items() if not fi.signatures]
-    total = len(items)
-    for i, (rel_str, file_info) in enumerate(items):
-        if total >= 50 and i > 0 and i % 100 == 0:
-            logger.info("Extracting signatures: %d/%d files ...", i, total)
+    if not items:
+        return
+
+    cache = _load_sig_cache(project_root)
+    cached_sigs = cache.get("signatures", {})
+
+    hits = 0
+    misses_items: list[tuple[str, object]] = []
+
+    for rel_str, file_info in items:
         full_path = project_root / rel_str
-        file_info.signatures = extract_signatures(full_path, file_info.language)
+        try:
+            st = full_path.stat()
+            mtime, size = st.st_mtime, st.st_size
+        except OSError:
+            mtime, size = 0.0, 0
+
+        entry = cached_sigs.get(rel_str)
+        if entry and entry.get("mtime") == mtime and entry.get("size") == size:
+            file_info.signatures = entry["sigs"]
+            hits += 1
+        else:
+            misses_items.append((rel_str, file_info))
+
+    # Parallelise cache misses
+    total_misses = len(misses_items)
+    if total_misses > 0:
+        max_workers = min(8, os.cpu_count() or 4)
+
+        def _extract_one(rel_str: str, language: str) -> tuple[str, list[str]]:
+            return rel_str, extract_signatures(project_root / rel_str, language)
+
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_extract_one, rel_str, fi.language): (rel_str, fi)
+                for rel_str, fi in misses_items
+            }
+            for future in as_completed(futures):
+                rel_str, file_info = futures[future]
+                rel_str_result, sigs = future.result()
+                file_info.signatures = sigs
+                # Update cache entry
+                full_path = project_root / rel_str_result
+                try:
+                    st = full_path.stat()
+                    cached_sigs[rel_str_result] = {
+                        "mtime": st.st_mtime,
+                        "size": st.st_size,
+                        "sigs": sigs,
+                    }
+                except OSError:
+                    pass
+                completed += 1
+                if total_misses >= 50 and completed > 0 and completed % 100 == 0:
+                    logger.info("Extracting signatures: %d/%d files ...", completed, total_misses)
+
+    logger.info("Signature cache: %d hits, %d misses", hits, total_misses if total_misses > 0 else 0)
+
+    cache["version"] = 1
+    cache["signatures"] = cached_sigs
+    _save_sig_cache(project_root, cache)
 
 
 def _compute_reference_counts(graph: DependencyGraph) -> Counter[str]:

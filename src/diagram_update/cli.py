@@ -6,13 +6,14 @@ import argparse
 import logging
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from diagram_update.analyzer import analyze
 from diagram_update.config import load_config
 from diagram_update.llm import generate_diagram
 from diagram_update.models import ConfigError, LLMError, ToolError
-from diagram_update.skeleton import generate_skeleton
+from diagram_update.skeleton import generate_skeleton, _extract_all_signatures
 from diagram_update.writer import render_png, write_diagram
 
 logger = logging.getLogger(__name__)
@@ -51,49 +52,22 @@ def main(argv: list[str] | None = None) -> int:
         len(graph.components), len(graph.relationships),
     )
 
-    errors = 0
-    attempted = 0
+    # Pre-extract signatures so parallel skeleton calls don't race on mutation
+    _extract_all_signatures(graph, project_root)
+
     diagrams_dir = project_root / "docs" / "diagrams"
-    for diagram_type in _DIAGRAM_TYPES:
-        attempted += 1
 
-        logger.info("[2/4] Building %s skeleton ...", diagram_type)
-        skeleton = generate_skeleton(
-            graph, project_root,
-            token_budget=config.token_budget,
-            diagram_type=diagram_type,
-        )
-        logger.info("[2/4] Skeleton: %d chars", len(skeleton))
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(
+                _generate_one_diagram, graph, config, project_root, diagrams_dir, dt,
+            ): dt
+            for dt in _DIAGRAM_TYPES
+        }
+        results = [future.result() for future in as_completed(futures)]
 
-        logger.info("[3/4] Generating %s diagram ...", diagram_type)
-        if diagram_type == "sequence" and not config.entry_points:
-            logger.info("[3/4] No entry_points configured — LLM will infer them from the codebase")
-
-        # Read existing diagram so the LLM can preserve node keys
-        existing_d2 = _read_existing_diagram(diagrams_dir, diagram_type)
-        if existing_d2:
-            logger.info("[3/4] Found existing %s diagram, passing to LLM", diagram_type)
-
-        try:
-            d2_code = generate_diagram(
-                skeleton,
-                diagram_type=diagram_type,
-                existing_d2=existing_d2,
-                model=config.model,
-                entry_points=config.entry_points or None,
-                timeout=config.timeout,
-            )
-        except (ToolError, LLMError) as exc:
-            print(f"Error ({diagram_type}): {exc}", file=sys.stderr)
-            errors += 1
-            continue
-
-        logger.info("[4/4] Writing %s diagram ...", diagram_type)
-        output_path = write_diagram(d2_code, diagram_type, project_root)
-        print(f"Wrote {output_path}")
-        png_path = render_png(output_path)
-        if png_path:
-            print(f"Rendered {png_path}")
+    attempted = len(results)
+    errors = sum(1 for _, success in results if not success)
 
     elapsed = time.monotonic() - t0
     print(f"Done in {elapsed:.1f}s")
@@ -102,6 +76,53 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     return 0
+
+
+def _generate_one_diagram(
+    graph, config, project_root: Path, diagrams_dir: Path, diagram_type: str,
+) -> tuple[str, bool]:
+    """Generate a single diagram (skeleton → LLM → write → render).
+
+    Returns ``(diagram_type, True)`` on success, ``(diagram_type, False)`` on error.
+    """
+    logger.info("[2/4][%s] Building skeleton ...", diagram_type)
+    skeleton = generate_skeleton(
+        graph, project_root,
+        token_budget=config.token_budget,
+        diagram_type=diagram_type,
+    )
+    logger.info("[2/4][%s] Skeleton: %d chars", diagram_type, len(skeleton))
+
+    logger.info("[3/4][%s] Generating diagram ...", diagram_type)
+    if diagram_type == "sequence" and not config.entry_points:
+        logger.info("[3/4][%s] No entry_points configured — LLM will infer them from the codebase", diagram_type)
+
+    # Read existing diagram so the LLM can preserve node keys
+    existing_d2 = _read_existing_diagram(diagrams_dir, diagram_type)
+    if existing_d2:
+        logger.info("[3/4][%s] Found existing diagram, passing to LLM", diagram_type)
+
+    try:
+        d2_code = generate_diagram(
+            skeleton,
+            diagram_type=diagram_type,
+            existing_d2=existing_d2,
+            model=config.model,
+            entry_points=config.entry_points or None,
+            timeout=config.timeout,
+        )
+    except (ToolError, LLMError) as exc:
+        print(f"Error ({diagram_type}): {exc}", file=sys.stderr)
+        return (diagram_type, False)
+
+    logger.info("[4/4][%s] Writing diagram ...", diagram_type)
+    output_path = write_diagram(d2_code, diagram_type, project_root)
+    print(f"Wrote {output_path}")
+    png_path = render_png(output_path)
+    if png_path:
+        print(f"Rendered {png_path}")
+
+    return (diagram_type, True)
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

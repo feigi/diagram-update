@@ -6,6 +6,7 @@ import fnmatch
 import logging
 import os
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from diagram_update.models import (
@@ -142,19 +143,40 @@ def _matches_any(path_str: str, patterns: list[str]) -> bool:
     return False
 
 
+def _parse_one_file(
+    rel_str: str, language: str, project_root: Path,
+) -> tuple[str, list[ImportInfo]]:
+    """Parse imports for a single file. Returns (rel_str, imports_list)."""
+    full_path = project_root / rel_str
+    if language == "python":
+        return rel_str, parse_python_file(full_path)
+    elif language == "java":
+        return rel_str, parse_java_file(full_path)
+    elif language == "c":
+        return rel_str, parse_c_file(full_path)
+    return rel_str, []
+
+
 def _parse_imports(files: dict[str, FileInfo], project_root: Path) -> None:
-    """Parse imports from all source files."""
+    """Parse imports from all source files using parallel threads."""
     total = len(files)
-    for i, (rel_str, file_info) in enumerate(files.items()):
-        if total >= 50 and i > 0 and i % 100 == 0:
-            logger.info("Parsing imports: %d/%d files ...", i, total)
-        full_path = project_root / rel_str
-        if file_info.language == "python":
-            file_info.imports = parse_python_file(full_path)
-        elif file_info.language == "java":
-            file_info.imports = parse_java_file(full_path)
-        elif file_info.language == "c":
-            file_info.imports = parse_c_file(full_path)
+    if total == 0:
+        return
+
+    max_workers = min(8, os.cpu_count() or 4)
+    completed = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_parse_one_file, rel_str, fi.language, project_root): rel_str
+            for rel_str, fi in files.items()
+        }
+        for future in as_completed(futures):
+            rel_str_result, imports_list = future.result()
+            files[rel_str_result].imports = imports_list
+            completed += 1
+            if total >= 50 and completed > 0 and completed % 100 == 0:
+                logger.info("Parsing imports: %d/%d files ...", completed, total)
 
 
 def _resolve_imports(files: dict[str, FileInfo], project_root: Path) -> None:
