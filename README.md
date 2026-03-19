@@ -86,7 +86,7 @@ All fields are optional -- without a config file, sensible defaults are used.
 ## Development
 
 ```sh
-git clone https://github.com/chrisgrieser/diagram-update
+git clone https://github.com/feigi/diagram-update
 cd diagram-update
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"

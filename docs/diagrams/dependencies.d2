@@ -1,0 +1,46 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+  }
+}
+
+direction: right
+
+cli: cli
+config: config
+models: models
+analyzer: analyzer
+python_parser: analyzer/python_parser
+java_parser: analyzer/java_parser
+c_parser: analyzer/c_parser
+skeleton: skeleton
+signatures: signatures
+llm: llm
+merger: merger
+writer: writer
+
+external: External {
+  yaml: PyYAML
+  subprocess: subprocess (stdlib)
+}
+
+cli -> analyzer: imports analyze()
+cli -> config: imports load_config()
+cli -> llm: imports generate_diagram()
+cli -> models: imports ConfigError, LLMError, ToolError
+cli -> skeleton: imports generate_skeleton()
+cli -> writer: imports write_diagram()
+config -> models: imports ConfigError, DiagramConfig
+config -> external.yaml: imports yaml
+llm -> models: imports LLMError, ToolError
+llm -> external.subprocess: invokes external LLM tool
+analyzer -> models: imports ImportInfo, DependencyGraph, etc.
+analyzer -> python_parser: imports parse_python_file()
+analyzer -> java_parser: imports parse_java_file(), extract_package()
+analyzer -> c_parser: imports parse_c_file()
+python_parser -> models: imports ImportInfo
+java_parser -> models: imports ImportInfo
+c_parser -> models: imports ImportInfo
+skeleton -> models: imports DependencyGraph
+skeleton -> signatures: imports extract_signatures()
+writer -> merger: imports merge_diagrams(), check_removal_threshold()

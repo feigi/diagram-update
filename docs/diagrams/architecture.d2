@@ -1,0 +1,49 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+  }
+}
+
+direction: right
+
+internals: Internal Modules {
+  cli: CLI Entry Point
+  config: Config Loader
+  models: Core Data Models
+  analyzer: Static Analyzer
+  python_parser: Python Parser
+  java_parser: Java Parser
+  c_parser: C Parser
+  signatures: Signature Extractor
+  skeleton: Skeleton Generator
+  llm: LLM Client
+  merger: D2 Merger
+  writer: D2 Writer
+}
+
+externals: External Systems {
+  copilot_cli: GitHub Copilot CLI {shape: cloud}
+  filesystem: Project Filesystem {shape: cylinder}
+  d2_files: D2 Diagram Files {shape: cylinder}
+}
+
+internals.cli -> internals.config: loads config
+internals.cli -> internals.analyzer: runs static analysis
+internals.cli -> internals.skeleton: generates skeleton
+internals.cli -> internals.llm: generates D2 diagram
+internals.cli -> internals.writer: writes output
+internals.cli -> internals.models: uses ConfigError, LLMError, ToolError
+internals.config -> internals.models: produces DiagramConfig
+internals.analyzer -> internals.models: produces DependencyGraph, Component, Relationship
+internals.analyzer -> internals.python_parser: parse Python imports
+internals.analyzer -> internals.java_parser: parse Java imports
+internals.analyzer -> internals.c_parser: parse C includes
+internals.skeleton -> internals.signatures: extract file signatures
+internals.skeleton -> internals.models: reads DependencyGraph
+internals.llm -> internals.merger: validates generated D2
+internals.llm -> externals.copilot_cli: invokes via subprocess
+internals.writer -> internals.merger: merge_diagrams, check_removal_threshold
+internals.writer -> externals.filesystem: reads/writes .d2 files
+internals.merger -> internals.models: internal D2 parse models
+internals.signatures -> externals.filesystem: reads source files
+internals.analyzer -> externals.filesystem: walks project directory

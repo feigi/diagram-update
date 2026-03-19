@@ -1,0 +1,52 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+  }
+}
+
+direction: right
+
+arch: Software Architecture {
+  shape: sequence_diagram
+
+  cli: CLI Entry Point
+  config: Config Loader
+  analyzer: Dependency Analyzer
+  python_parser: Python Parser
+  java_parser: Java Parser
+  c_parser: C Parser
+  skeleton: Skeleton Generator
+  signatures: Signature Extractor
+  llm: LLM Client
+  copilot_cli: GitHub Copilot CLI
+  merger: D2 Merger
+  writer: Diagram Writer
+  models: Core Data Models
+  filesystem: File System
+
+  cli -> config: "load_config(project_root) → DiagramConfig"
+  config -> models: constructs DiagramConfig
+  config -> filesystem: reads .diagram-update.yml
+  cli -> analyzer: "analyze(config, project_root) → DependencyGraph"
+  analyzer -> models: "constructs FileInfo, ImportInfo, Component, Relationship, DependencyGraph"
+  analyzer -> python_parser: "parse_python_file(path) → list[ImportInfo]"
+  python_parser -> models: returns ImportInfo instances
+  analyzer -> java_parser: "parse_java_file(path) → list[ImportInfo]"
+  java_parser -> models: returns ImportInfo instances
+  analyzer -> c_parser: "parse_c_file(path) → list[ImportInfo]"
+  c_parser -> models: returns ImportInfo instances
+  analyzer -> filesystem: "_walk_files() scans project tree"
+  cli -> skeleton: "generate_skeleton(graph, project_root) → str"
+  skeleton -> models: reads DependencyGraph
+  skeleton -> signatures: "extract_signatures(path, language) → list[str]"
+  signatures -> filesystem: reads source files via ast/regex
+  cli -> llm: "generate_diagram(skeleton, diagram_type, existing_d2) → str"
+  llm -> merger: "_validate_d2() calls parse_d2()"
+  llm -> copilot_cli: "_call_copilot() via subprocess (pass 1: identify components)"
+  llm -> copilot_cli: "_call_copilot() via subprocess (pass 2: generate D2)"
+  cli -> writer: "write_diagram(d2_content, diagram_type, project_root)"
+  writer -> merger: "merge_diagrams(old_d2, new_d2) → str"
+  writer -> merger: "check_removal_threshold(old, merged) → bool"
+  merger -> models: "(no dependency; pure D2 string parsing)"
+  writer -> filesystem: "reads/writes docs/diagrams/*.d2"
+}
