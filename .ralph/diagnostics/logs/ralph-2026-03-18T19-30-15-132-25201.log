@@ -1,3 +1,0 @@
-[2m2026-03-18T18:30:15.138124Z[0m [33m WARN[0m [2mralph::preflight[0m[2m:[0m Config file "ralph.yml" not found, using defaults
-[2m2026-03-18T18:30:15.141994Z[0m [33m WARN[0m [2mralph::loop_runner[0m[2m:[0m Interactive mode requested but stdout is not a TTY, falling back to autonomous
-Error: Prompt file 'PROMPT.md' not found. Check the path or use -p "text" for inline prompt.
