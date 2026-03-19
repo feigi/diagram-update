@@ -5,6 +5,7 @@ from diagram_update.merger import (
     collapse_edges,
     merge_diagrams,
     parse_d2,
+    remove_orphan_nodes,
 )
 
 
@@ -304,3 +305,64 @@ class TestCollapseEdges:
         assert "auth -> db: validates, checks" in result
         assert result.count("api -> db") == 1
         assert result.count("auth -> db") == 1
+
+
+# --- remove_orphan_nodes tests ---
+
+
+class TestRemoveOrphanNodes:
+    def test_no_orphans_unchanged(self) -> None:
+        d2 = "api\ndb\napi -> db"
+        assert remove_orphan_nodes(d2) == d2
+
+    def test_removes_simple_orphan(self) -> None:
+        d2 = "api\ndb\norphan\napi -> db"
+        result = remove_orphan_nodes(d2)
+        assert "orphan" not in result
+        assert "api" in result
+        assert "db" in result
+
+    def test_removes_orphan_with_block(self) -> None:
+        d2 = "api\norphan {\n  label: Unused\n}\ndb\napi -> db"
+        result = remove_orphan_nodes(d2)
+        assert "orphan" not in result
+        assert "Unused" not in result
+        assert "api" in result
+
+    def test_keeps_container_with_child_edges(self) -> None:
+        d2 = "layer: Layer {\n  api: API\n  db: DB\n}\nlayer.api -> layer.db"
+        result = remove_orphan_nodes(d2)
+        assert "layer: Layer" in result
+
+    def test_keeps_container_as_edge_prefix(self) -> None:
+        d2 = "infra: Infra {\n  cache: Cache\n}\nother\ninfra.cache -> other"
+        result = remove_orphan_nodes(d2)
+        assert "infra: Infra" in result
+        assert "other" in result
+
+    def test_removes_multiple_orphans(self) -> None:
+        d2 = "api\ndb\nfoo\nbar\napi -> db"
+        result = remove_orphan_nodes(d2)
+        assert "foo" not in result
+        assert "bar" not in result
+        assert "api -> db" in result
+
+    def test_preserves_comments_and_config(self) -> None:
+        d2 = "# header\napi\ndb\norphan\napi -> db"
+        result = remove_orphan_nodes(d2)
+        assert "# header" in result
+        assert "orphan" not in result
+
+    def test_no_edges_returns_unchanged(self) -> None:
+        d2 = "api\ndb"
+        assert remove_orphan_nodes(d2) == d2
+
+    def test_empty_returns_unchanged(self) -> None:
+        d2 = ""
+        assert remove_orphan_nodes(d2) == d2
+
+    def test_node_as_direct_source(self) -> None:
+        d2 = "api\ndb\napi -> db"
+        result = remove_orphan_nodes(d2)
+        assert "api" in result
+        assert "db" in result

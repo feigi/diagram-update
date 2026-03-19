@@ -118,11 +118,11 @@ class TestBuildPass2Prompt:
         existing = "api: API\napi -> db"
         prompt = _build_pass2_prompt("components", "architecture", existing)
         assert "api: API" in prompt
-        assert "Preserve the structure" in prompt
+        assert "MUST reproduce it as closely" in prompt
 
     def test_no_existing_d2(self):
         prompt = _build_pass2_prompt("components", "architecture", None)
-        assert "Preserve the structure" not in prompt
+        assert "MUST reproduce it as closely" not in prompt
 
     def test_sequence_diagram_instructions(self):
         prompt = _build_pass2_prompt("components", "sequence", None)

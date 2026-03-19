@@ -64,9 +64,10 @@ def generate_diagram(
     if not d2.strip():
         raise LLMError("Empty response from copilot after retry")
 
-    # Collapse duplicate edges between same source/target pairs
-    from diagram_update.merger import collapse_edges
+    # Post-process: collapse duplicate edges, remove orphan nodes
+    from diagram_update.merger import collapse_edges, remove_orphan_nodes
     d2 = collapse_edges(d2)
+    d2 = remove_orphan_nodes(d2)
 
     _validate_d2(d2)
     return d2
@@ -89,6 +90,9 @@ def _build_pass1_prompt(
     existing_d2: str | None = None,
 ) -> str:
     """Build the Pass 1 prompt for component identification."""
+    if existing_d2:
+        return _build_pass1_update_prompt(skeleton, diagram_type, existing_d2, entry_points)
+
     parts = [
         "You are a software architect analyzing a codebase. Given the following "
         "codebase skeleton, identify the key architectural components and their "
@@ -121,14 +125,54 @@ def _build_pass1_prompt(
                 "Show the sequence of interactions between components for each flow."
             )
 
-    if existing_d2:
-        parts.extend([
-            "\n\nIMPORTANT: An existing diagram already exists with established component "
-            "IDs and groupings. You MUST reuse the same component IDs (keys) and group "
-            "structure. Only add new components or remove ones that no longer exist in "
-            "the codebase. Here is the existing diagram:\n",
-            existing_d2,
-        ])
+    parts.extend([
+        "\n\nOutput a structured list:",
+        "COMPONENTS:",
+        "- id: <key>, label: <human name>, type: <service|module|database|queue|external>",
+        "- ...",
+        "",
+        "RELATIONSHIPS:",
+        "- <source_id> -> <target_id>: <relationship description>",
+        "- ...",
+        "",
+        "Output ONLY the structured list, no explanations.",
+    ])
+
+    return "\n".join(parts)
+
+
+def _build_pass1_update_prompt(
+    skeleton: str,
+    diagram_type: str,
+    existing_d2: str,
+    entry_points: list[str] | None = None,
+) -> str:
+    """Build pass 1 prompt that updates an existing diagram rather than creating from scratch."""
+    parts = [
+        "You are updating an existing software architecture diagram. "
+        "The existing diagram below is the AUTHORITATIVE baseline. "
+        "Your job is to identify ONLY what changed based on the current codebase skeleton.\n",
+        f"Diagram type: {diagram_type}\n",
+        "EXISTING DIAGRAM (this is your starting point — replicate it exactly unless "
+        "the codebase skeleton shows something changed):\n",
+        existing_d2,
+        "\n\nCURRENT CODEBASE SKELETON (use this to detect additions, removals, or changes):\n",
+        skeleton,
+    ]
+
+    parts.extend([
+        "\n\nRules:",
+        "- Keep ALL existing component IDs, labels, groupings, and relationship descriptions UNCHANGED "
+        "unless the codebase skeleton proves they are wrong or outdated.",
+        "- Do NOT rename, re-label, regroup, or rephrase existing components or relationships.",
+        "- Only ADD components/relationships that are new in the codebase but missing from the diagram.",
+        "- Only REMOVE components/relationships that no longer exist in the codebase.",
+        "- If nothing changed, reproduce the existing diagram's components and relationships exactly.",
+    ])
+
+    if diagram_type == "sequence" and entry_points:
+        ep_list = ", ".join(entry_points)
+        parts.append(f"\nEntry points: {ep_list}")
 
     parts.extend([
         "\n\nOutput a structured list:",
@@ -175,9 +219,11 @@ def _build_pass2_prompt(
 
     if existing_d2:
         parts.extend([
-            "\n\nPreserve the structure of this existing diagram where possible.",
-            "Only add new components, remove deleted ones, and update changed relationships.",
-            f"Existing diagram:\n{existing_d2}",
+            "\n\nCRITICAL: An existing diagram is provided below. You MUST reproduce it as closely "
+            "as possible. Keep the same node keys, labels, container structure, edge labels, "
+            "and ordering. Only apply the minimal changes needed to reflect the component list above. "
+            "If a node/edge exists in the existing diagram and in the component list, copy it verbatim.",
+            f"\nExisting diagram:\n{existing_d2}",
         ])
 
     parts.append(

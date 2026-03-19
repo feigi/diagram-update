@@ -320,6 +320,50 @@ def _common_prefix(labels: list[str]) -> str:
     return result if result else ""
 
 
+def remove_orphan_nodes(d2: str) -> str:
+    """Remove nodes that have no edges connecting to or from them.
+
+    A node is considered connected if its key (or a dotted child of it)
+    appears as a source or target in any edge.
+    """
+    parsed = parse_d2(d2)
+
+    if not parsed.node_keys or not parsed.edge_tuples:
+        return d2
+
+    # Collect all keys referenced in edges (sources and targets)
+    referenced: set[str] = set()
+    for source, _, target in parsed.edge_tuples:
+        referenced.add(source)
+        referenced.add(target)
+
+    # A node is connected if its key matches directly or is a prefix
+    # of a referenced dotted path (container whose children have edges)
+    orphans: set[str] = set()
+    for node_key in parsed.node_keys:
+        is_connected = False
+        for ref in referenced:
+            if ref == node_key or ref.startswith(node_key + "."):
+                is_connected = True
+                break
+        if not is_connected:
+            orphans.add(node_key)
+
+    if not orphans:
+        return d2
+
+    # Build set of lines to remove
+    remove_lines: set[int] = set()
+    for node_key in orphans:
+        if node_key in parsed.node_spans:
+            start, end = parsed.node_spans[node_key]
+            for li in range(start, end + 1):
+                remove_lines.add(li)
+
+    output = [line for i, line in enumerate(parsed.lines) if i not in remove_lines]
+    return "\n".join(output)
+
+
 def _is_config_line(stripped: str) -> bool:
     """Check if a line is part of the D2 config/header block."""
     for prefix in _SKIP_PREFIXES:
