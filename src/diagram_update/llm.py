@@ -186,7 +186,11 @@ def generate_diagram(
         raise LLMError("Empty response from copilot after retry")
 
     # Post-process: collapse duplicate edges, remove orphan nodes
-    from diagram_update.merger import collapse_edges, remove_orphan_nodes
+    from diagram_update.merger import (
+        collapse_container_edges, collapse_edges, remove_orphan_nodes,
+    )
+    if diagram_type == "architecture":
+        d2 = collapse_container_edges(d2)
     d2 = collapse_edges(d2)
     d2 = remove_orphan_nodes(d2)
 

@@ -277,6 +277,92 @@ def collapse_edges(d2: str) -> str:
     return "\n".join(output)
 
 
+def collapse_container_edges(d2: str) -> str:
+    """Collapse edges to their top-level container endpoints.
+
+    For architecture diagrams, ``a.x -> b.y: label1`` and ``a.z -> b.w: label2``
+    are both between containers *a* and *b*.  This function merges them into a
+    single ``a -> b: label1, label2`` edge, keeping the diagram at a high level.
+
+    Edges between nodes in the **same** container (``a.x -> a.y``) are collapsed
+    into a single intra-container edge ``a -> a`` only if there are multiple;
+    single intra-container edges are kept as-is.
+
+    Top-level edges (no dot) are passed through unchanged.
+    """
+    lines = d2.splitlines()
+
+    # Group edges by (source_container, direction, target_container)
+    edge_groups: dict[tuple[str, str, str], list[tuple[str, int]]] = {}
+    edge_order: list[tuple[str, str, str]] = []
+    passthrough_indices: set[int] = set()
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        edge_match = _EDGE_RE.match(stripped)
+        if not edge_match:
+            continue
+
+        source = edge_match.group(1)
+        direction = edge_match.group(2)
+        target = edge_match.group(3)
+        label = (edge_match.group(4) or "").strip()
+
+        src_container = source.split(".")[0]
+        tgt_container = target.split(".")[0]
+
+        # Top-level edge (no containers) — keep as-is
+        if "." not in source and "." not in target:
+            passthrough_indices.add(i)
+            continue
+
+        key = (src_container, direction, tgt_container)
+        if key not in edge_groups:
+            edge_groups[key] = []
+            edge_order.append(key)
+        edge_groups[key].append((label, i))
+
+    # Nothing to collapse
+    if all(len(v) <= 1 for v in edge_groups.values()):
+        return d2
+
+    remove_lines: set[int] = set()
+    replace_lines: dict[int, str] = {}
+
+    for key, entries in edge_groups.items():
+        if len(entries) <= 1:
+            continue
+
+        src_container, direction, tgt_container = key
+        labels = [label for label, _ in entries if label]
+        first_line_idx = entries[0][1]
+
+        # Remove all occurrences
+        for _, line_idx in entries:
+            remove_lines.add(line_idx)
+
+        merged_label = _merge_labels(labels)
+        if merged_label:
+            replace_lines[first_line_idx] = (
+                f"{src_container} {direction} {tgt_container}: {merged_label}"
+            )
+        else:
+            replace_lines[first_line_idx] = (
+                f"{src_container} {direction} {tgt_container}"
+            )
+
+    output = []
+    for i, line in enumerate(lines):
+        if i in remove_lines and i not in replace_lines:
+            continue
+        if i in replace_lines:
+            output.append(replace_lines[i])
+        else:
+            output.append(line)
+
+    return "\n".join(output)
+
+
 def _merge_labels(labels: list[str]) -> str:
     """Merge multiple edge labels into a single label."""
     # Deduplicate while preserving order

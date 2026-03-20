@@ -2,6 +2,7 @@
 
 from diagram_update.merger import (
     check_removal_threshold,
+    collapse_container_edges,
     collapse_edges,
     merge_diagrams,
     parse_d2,
@@ -322,6 +323,79 @@ class TestCollapseEdges:
         assert "auth -> db: validates, checks" in result
         assert result.count("api -> db") == 1
         assert result.count("auth -> db") == 1
+
+
+# --- collapse_container_edges tests ---
+
+
+class TestCollapseContainerEdges:
+    def test_top_level_edges_unchanged(self) -> None:
+        d2 = "api -> db: reads\napi -> cache: writes"
+        assert collapse_container_edges(d2) == d2
+
+    def test_single_dotted_edge_unchanged(self) -> None:
+        d2 = "internals.cli -> externals.copilot: invokes"
+        assert collapse_container_edges(d2) == d2
+
+    def test_collapses_same_container_pair(self) -> None:
+        d2 = (
+            "internals.cli -> externals.copilot: invokes\n"
+            "internals.llm -> externals.copilot: calls"
+        )
+        result = collapse_container_edges(d2)
+        assert result.count("internals -> externals") == 1
+        assert "invokes" in result
+        assert "calls" in result
+
+    def test_preserves_node_definitions(self) -> None:
+        d2 = (
+            "internals: Internal Modules {\n"
+            "  cli: CLI\n"
+            "  llm: LLM Client\n"
+            "}\n"
+            "externals: External {\n"
+            "  copilot: Copilot\n"
+            "}\n"
+            "internals.cli -> externals.copilot: invokes\n"
+            "internals.llm -> externals.copilot: calls"
+        )
+        result = collapse_container_edges(d2)
+        assert "Internal Modules" in result
+        assert "internals -> externals" in result
+        assert result.count("internals -> externals") == 1
+
+    def test_multiple_container_pairs(self) -> None:
+        d2 = (
+            "svc.a -> dao.x: reads\n"
+            "svc.b -> dao.y: writes\n"
+            "svc.a -> api.z: calls\n"
+            "svc.b -> api.w: calls"
+        )
+        result = collapse_container_edges(d2)
+        assert result.count("svc -> dao") == 1
+        assert result.count("svc -> api") == 1
+        assert "reads" in result
+        assert "writes" in result
+
+    def test_intra_container_edges_collapsed(self) -> None:
+        d2 = (
+            "pkg.a -> pkg.b: uses\n"
+            "pkg.c -> pkg.d: calls"
+        )
+        result = collapse_container_edges(d2)
+        assert result.count("pkg -> pkg") == 1
+        assert "uses" in result
+        assert "calls" in result
+
+    def test_mixed_dotted_and_top_level(self) -> None:
+        d2 = (
+            "api -> db: reads\n"
+            "svc.handler -> svc.repo: calls\n"
+            "svc.handler -> svc.cache: caches"
+        )
+        result = collapse_container_edges(d2)
+        assert "api -> db: reads" in result
+        assert result.count("svc -> svc") == 1
 
 
 # --- remove_orphan_nodes tests ---
